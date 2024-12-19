@@ -1,5 +1,6 @@
 pub mod campus_data;
 mod test;
+mod debug_draw;
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -15,7 +16,7 @@ trait Node<D> {
     fn get_neighbors(&self) -> Vec<(Self, D)> where Self: Sized;
 
     /// Give an underestimated cost to get from self to other
-    fn heuristic_cost(&self, other: &Self) -> D;
+    fn heuristic_cost(&self, other: &Self) -> Result<D>;
 }
 
 /// Used for custom ordering of min-heap for A* algorithm
@@ -44,8 +45,17 @@ impl<N: Eq, C: PartialEq + PartialOrd> Ord for SearchNode<N, C> {
     }
 }
 
+#[derive(Debug)]
+pub enum Error {
+    NoPathFound,
+    CampusError(campus_data::CampusError),
+    DebugDrawingError(String),
+}
+
+type Result<T> = std::result::Result<T, Error>;
+
 /// Use rich nodes to run A* on a potentially unbound graph.
-pub fn find_path<C, N>(start: &N, end: &N) -> Option<Vec<N>>
+pub fn find_path<C, N>(start: &N, end: &N) -> Result<Vec<N>>
 where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
         C: PartialOrd + Zero + Clone
 {
@@ -83,7 +93,7 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
     while let Some(current) = open.pop() {
         println!("Checking node {:?}", current.node);
         if let Some(actual_current_cost) = gscore.get(&current.node) {
-            let actual_fscore = actual_current_cost.clone() + end.heuristic_cost(&current.node);
+            let actual_fscore = actual_current_cost.clone() + end.heuristic_cost(&current.node)?;
             if actual_fscore < current.current_cost {
                 // this is a duplicate
                 println!("Duplicate! skipping");
@@ -91,7 +101,7 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
             }
         }
         if &current.node == end {
-            return Some(reconstruct_path(parent.clone()));
+            return Ok(reconstruct_path(parent.clone()));
         }
         for (n, edge_cost) in current.node.get_neighbors() {
             println!("visiting neighbor {:?}", n);
@@ -106,7 +116,7 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
                         // relax this edge
                         gscore.insert(n.clone(), cost.clone());
                         parent.insert(n.clone(), Some(current.node.clone()));
-                        let fscore = g + end.heuristic_cost(&n);
+                        let fscore = g + end.heuristic_cost(&n)?;
                         // push a duplicate
                         open.push(SearchNode {
                             node: n,
@@ -118,7 +128,7 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
                     gscore.insert(n.clone(), g.clone());
                     parent.insert(n.clone(), Some(current.node.clone()));
                     open.push(SearchNode {
-                        current_cost: g + end.heuristic_cost(&n),
+                        current_cost: g + end.heuristic_cost(&n)?,
                         node: n,
                     })
                 }
@@ -126,5 +136,5 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
         }
         closed.insert(current.node.clone());
     }
-    None
+    Err(Error::NoPathFound)
 }

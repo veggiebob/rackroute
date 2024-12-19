@@ -42,8 +42,8 @@ mod tests {
                         .collect()
         }
 
-        fn heuristic_cost(&self, other: &Self) -> u8 {
-            1
+        fn heuristic_cost(&self, other: &Self) -> Result<u8> {
+            Ok(1)
         }
     }
     #[test]
@@ -65,7 +65,7 @@ mod tests {
             name: "e".to_string(),
             graph: Rc::clone(&graph)
         };
-        if let Some(path) = find_path(&start_node, &end_node) {
+        if let Ok(path) = find_path(&start_node, &end_node) {
             println!("path found is: {:?}", path);
         } else {
             println!("no path found");
@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn test_read_osm_data() {
-        let data = read_osm_data("data/rit.osm");
-        println!("{:?}", data);
+        let data = read_osm_data("data/rit.osm", Default::default());
+        println!("Done!");
     }
 }
