@@ -34,7 +34,8 @@ pub enum Amenities {
 pub struct Campus {
     nodes: HashMap<CampusNodeID, CampusNode>,
     edges: HashMap<CampusNodeID, Vec<CampusEdge>>,
-    campus_config: CampusConfig
+    campus_config: CampusConfig,
+    pub misc_features: Vec<SimpleEdge>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ pub struct CampusNode {
     pub amenities: BitFlags<Amenities>
 }
 
+pub type SimpleEdge = (Location, Location);
 #[derive(Debug)]
 pub struct CampusEdge {
     pub start: CampusNodeID,
@@ -105,6 +107,7 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         }
         edge_count += 1;
     };
+    let mut misc_features = vec![];
     let check = |tags: &Vec<Tag>, key, val|
         tags.iter().any(|t| (t.key.as_str(), t.val.as_str()) == (key, val));
     let contains = |tags: &Vec<Tag>, key|
@@ -161,39 +164,44 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         if footpath { modes |= TransMode::Walk; }
         if bike_path { modes |= TransMode::Bike; }
         if road { modes |= TransMode::Car }
-
-        if !footpath && !bike_path && !road
+        
+        let is_misc_feature = !footpath && !bike_path && !road
             && !parking
             && !contains(&way.tags, "highway")
             && !contains(&way.tags, "footway")
-            && !check(&way.tags, "route", "road") {
-            // not really the kind of way we're looking for
-            continue;
-        }
+            && !check(&way.tags, "route", "road");
 
         let mut prev_node = None;
         for i in way.nodes.iter() {
             match i {
                 UnresolvedReference::Node(n) => {
                     if let Some(pnode) = prev_node {
-                        add_edge(CampusEdge {
-                            start: pnode,
-                            end: n.clone(),
-                            modes: modes.clone()
-                        });
-                        if !one_way {
+                        if is_misc_feature {
+                            if let (Some(s), Some(e)) = (nodes.get(&pnode), nodes.get(n)) {
+                                misc_features.push(
+                                    (s.location.clone(), e.location.clone())
+                                );
+                            }
+                        } else {
                             add_edge(CampusEdge {
-                                start: n.clone(),
-                                end: pnode,
+                                start: pnode,
+                                end: n.clone(),
                                 modes: modes.clone()
                             });
-                        }
-                        if parking {
-                            if let Some(p) = nodes.get_mut(&pnode) {
-                                p.amenities |= Amenities::Parking;
+                            if !one_way {
+                                add_edge(CampusEdge {
+                                    start: n.clone(),
+                                    end: pnode,
+                                    modes: modes.clone()
+                                });
                             }
-                            if let Some(p) = nodes.get_mut(n) {
-                                p.amenities |= Amenities::Parking;
+                            if parking {
+                                if let Some(p) = nodes.get_mut(&pnode) {
+                                    p.amenities |= Amenities::Parking;
+                                }
+                                if let Some(p) = nodes.get_mut(n) {
+                                    p.amenities |= Amenities::Parking;
+                                }
                             }
                         }
                     }
@@ -213,6 +221,7 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         nodes,
         edges,
         campus_config: config,
+        misc_features
     };
     let mut bike_rack_edges_added = 0;
     let mut edges_to_add = vec![];

@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use full_palette::GREY;
 use osm_xml::Coordinate;
 use plotters::coord::Shift;
 use plotters::prelude::*;
@@ -25,9 +26,9 @@ fn map_to_screen(bb: BoundingBox, screen_dims: (u32, u32)) -> Box<dyn Fn(&Locati
 
 pub fn create_campus_drawing(campus: Rc<Campus>) -> Result<(DrawingArea<BitMapBackend<'static>, Shift>, BoundingBox), Error> {
     let bb = campus.bounding_box();
-    let aspect: f32 = aspect_ratio(bb);
-    let width: i32 = 1920;
-    let height: i32 = (width as f32 * aspect) as i32;
+    let size_ratio = 1920. / (bb.1.1 - bb.1.0);
+    let width: i32 = (size_ratio * (bb.1.1 - bb.1.0)) as i32;
+    let height: i32 = (size_ratio * (bb.0.1 - bb.0.0)) as i32;
     let map_loc = map_to_screen(bb, (width as u32, height as u32));
     println!("Bounding box is {:?}", bb);
 
@@ -36,6 +37,12 @@ pub fn create_campus_drawing(campus: Rc<Campus>) -> Result<(DrawingArea<BitMapBa
     let draw_line = |(x1, y1): (&i32, &i32), (x2, y2): (&i32, &i32), style|
         root.draw(&PathElement::new(vec![(*x1, *y1), (*x2, *y2)], style));
     let mut edge_count = 0;
+    for (l1, l2) in campus.misc_features.iter() {
+        let (x1, y1) = map_loc(l1);
+        let (x2, y2) = map_loc(&l2);
+        draw_line((&x1, &y1), (&x2, &y2), &GREY)?;
+        edge_count += 1;
+    }
     for edge in campus.edges() {
         let (x1, y1) = map_loc(&campus.get_node(&edge.start)?.location);
         let (x2, y2) = map_loc(&campus.get_node(&edge.end)?.location);
@@ -75,7 +82,7 @@ mod tests {
         // lat: [43.05371, 43.09635]
         // long: [-77.70424, -77.64793]
         println!("Loading campus...");
-        let mut campus = read_osm_data("data/rit-bigger.osm", Default::default()).unwrap();
+        let mut campus = read_osm_data("data/rit-bigger-rog.osm", Default::default()).unwrap();
         campus.crop_latitudes(43.05371, 43.09635);
         campus.crop_longitudes(-77.70424, -77.64793);
         let campus = Rc::new(campus);

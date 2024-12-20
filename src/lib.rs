@@ -1,4 +1,5 @@
 pub mod campus_data;
+pub mod map_optimization;
 mod test;
 mod debug_draw;
 
