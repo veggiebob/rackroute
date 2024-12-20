@@ -1,79 +1,48 @@
+use std::rc::Rc;
 use osm_xml::Coordinate;
 use plotters::coord::Shift;
 use plotters::prelude::*;
-use crate::campus_data::{Campus, Location};
+use crate::campus_data::{BoundingBox, Campus, Location};
 use crate::Error;
 
-fn get_bounding_box<N, X, Y>(xs: X, ys: Y) -> ((N, N), (N, N))
-where   N: PartialOrd + Copy + Default,
-        X: Iterator<Item=N>,
-        Y: Iterator<Item=N> {
-    let mut first = true;
-    let mut min_x = Default::default();
-    let mut max_x = Default::default();
-    let mut min_y = Default::default();
-    let mut max_y = Default::default();
-    for (x,y) in xs.zip(ys) {
-        if first {
-            min_x = x;
-            max_x = x;
-            min_y = y;
-            max_y = y;
-        } else {
-            if x < min_x {
-                min_x = x;
-            }
-            if x > max_x {
-                max_x = x;
-            }
-            if y < min_y {
-                min_y = y;
-            }
-            if y > max_y {
-                max_y = y;
-            }
-        }
-        first = false;
-    }
-    ((min_x, max_x), (min_y, max_y))
+fn aspect_ratio(bb: BoundingBox) -> f32 {
+    let ((min_x, max_x), (min_y, max_y)) = bb;
+    let width = max_x - min_x;
+    let height = max_y - min_y;
+    height as f32 / width as f32
 }
-pub fn create_campus_drawing(campus: &Campus) -> Result<DrawingArea<BitMapBackend, Shift>, Error> {
-    let mut plot_edges = vec![];
-    for edge in campus.edges() {
-        let Location(lat, long) = campus.get_node(&edge.start)?.location;
-        let Location(lat2, long2) = campus.get_node(&edge.end)?.location;
-        plot_edges.push(((long, lat), (long2, lat2)));
-    }
-    let campus_bb =
-        get_bounding_box(plot_edges.iter().map(|((x1, _), (x2, _))| vec![*x1, *x2]).flatten(),
-                                     plot_edges.iter().map(|((_, y1), (_, y2))| vec![*y1, *y2]).flatten());
-    let aspect = (campus_bb.1.1 - campus_bb.1.0) / (campus_bb.0.1 - campus_bb.0.0);
+
+fn map_to_screen(bb: BoundingBox, screen_dims: (u32, u32)) -> Box<dyn Fn(&Location) -> (i32, i32)>
+{
+    let (width, height) = screen_dims.clone();
+    let ((min_lat, max_lat), (min_long, max_long)) = bb;
+    let map_long = move |x| ((x - min_long) / (max_long - min_long) * width as f64) as i32;
+    let map_lat = move |y| height as i32 - ((y - min_lat) / (max_lat - min_lat) * height as f64) as i32;
+    let map_loc = move |loc: &Location| (map_long(loc.lng()), map_lat(loc.lat()));
+    Box::new(map_loc)
+}
+
+pub fn create_campus_drawing(campus: Rc<Campus>) -> Result<(DrawingArea<BitMapBackend<'static>, Shift>, BoundingBox), Error> {
+    let bb = campus.bounding_box();
+    let aspect: f32 = aspect_ratio(bb);
     let width: i32 = 1920;
-    let height: i32 = (width as Coordinate * aspect) as i32;
-    println!("Bounding box is {:?}", campus_bb);
-    let map_x = |x| ((x - campus_bb.0.0) / (campus_bb.0.1 - campus_bb.0.0) * width as f64) as i32;
-    let map_y = |y| height - ((y - campus_bb.1.0) / (campus_bb.1.1 - campus_bb.1.0) * height as f64) as i32;
+    let height: i32 = (width as f32 * aspect) as i32;
+    let map_loc = map_to_screen(bb, (width as u32, height as u32));
+    println!("Bounding box is {:?}", bb);
 
     let root = BitMapBackend::new("debug/1.png", (width as u32, height as u32)).into_drawing_area();
     root.fill(&WHITE)?;
     let draw_line = |(x1, y1): (&i32, &i32), (x2, y2): (&i32, &i32), style|
         root.draw(&PathElement::new(vec![(*x1, *y1), (*x2, *y2)], style));
-    // draw_line((&0, &0), (&width, &height), &RED)?;
     let mut edge_count = 0;
-    for ((x, y), (x2, y2)) in plot_edges {
-        let x1 = map_x(x);
-        let y1 = map_y(y);
-        let x2 = map_x(x2);
-        let y2 = map_y(y2);
+    for edge in campus.edges() {
+        let (x1, y1) = map_loc(&campus.get_node(&edge.start)?.location);
+        let (x2, y2) = map_loc(&campus.get_node(&edge.end)?.location);
         draw_line((&x1, &y1), (&x2, &y2), &BLACK)?;
-        // println!("Drew edge from ({}, {}) to ({}, {})", x1, y1, x2, y2);
         edge_count += 1;
-        // break;
     }
     for point in campus.nodes() {
-        let Location(lat, long) = point.location;
-        let x = map_x(long);
-        let y = map_y(lat);
+        let (x, y) = map_loc(&point.location);
         let style = if point.has_bike_rack() {
             &GREEN
         } else if point.has_parking() {
@@ -83,8 +52,7 @@ pub fn create_campus_drawing(campus: &Campus) -> Result<DrawingArea<BitMapBacken
         };
         root.draw(&Circle::new((x, y), 3, style))?;
     }
-    println!("Drew {} edges", edge_count);
-    Ok(root)
+    Ok((root, bb))
 }
 
 impl<DB: std::error::Error + Send + Sync> From<DrawingAreaErrorKind<DB>> for Error {
@@ -96,17 +64,53 @@ impl<DB: std::error::Error + Send + Sync> From<DrawingAreaErrorKind<DB>> for Err
 // tests
 #[cfg(test)]
 mod tests {
-    use crate::campus_data::read_osm_data;
+    use std::rc::Rc;
+    use crate::campus_data::{read_osm_data, TravellerState};
+    use crate::{find_path};
     use super::*;
 
     #[test]
     fn test_main() {
         // lat: [43.05371, 43.09635]
         // long: [-77.70424, -77.64793]
+        println!("Loading campus...");
         let mut campus = read_osm_data("data/rit-bigger.osm", Default::default()).unwrap();
         campus.crop_latitudes(43.05371, 43.09635);
         campus.crop_longitudes(-77.70424, -77.64793);
-        let plot = create_campus_drawing(&campus).unwrap();
+        let campus = Rc::new(campus);
+        println!("Drawing campus...");
+        let (plot, bb) = create_campus_drawing(Rc::clone(&campus)).unwrap();
+        let coord_map = map_to_screen(bb, plot.dim_in_pixel());
+
+        println!("Finding start and end nodes...");
+        // sample start: 43.08436913213423, -77.67268359047404
+        // sample end: 43.08235610659231, -77.68296257654112
+        // sample parking: 43.08174191943827, -77.6802958319057
+        let start_loc = Location(43.08436913213423, -77.67268359047404);
+        let end_loc = Location(43.08235610659231, -77.68296257654112);
+        // let end_loc = Location(43.084447647668995, -77.67436324397717);
+        let parking_loc = Location(43.08174191943827, -77.6802958319057);
+        let (start_node, dist_start) = campus.find_closest_node(&start_loc).unwrap();
+        let (end_node, dist_end) = campus.find_closest_node(&end_loc).unwrap();
+        let (parking_node, dist_park) = campus.find_closest_node(&parking_loc).unwrap();
+        plot.draw(&Circle::new(coord_map(&start_node.location), 2, &RED)).unwrap();
+        plot.draw(&Circle::new(coord_map(&end_node.location), 2, &RED)).unwrap();
+        plot.draw(&Circle::new(coord_map(&parking_node.location), 2, &RED)).unwrap();
+        let start_id = start_node.id;
+        let end_id = end_node.id;
+        let park_id = parking_node.id;
+        println!("Found nodes within {} and {} and {}", dist_start, dist_end, dist_park);
+
+        println!("Finding path...");
+        let start_state = TravellerState::new(Rc::clone(&campus), start_id, 0, 0);
+        let end_state = TravellerState::new(Rc::clone(&campus), end_id, 0, 0);
+        plot.present().unwrap();
+        let path = find_path(&start_state, &end_state).unwrap();
+        println!("Path found with {} nodes", path.len());
+
+        println!("Drawing path...");
+        let points = path.iter().map(|node| coord_map(&campus.get_node(&node.me_id).unwrap().location)).collect::<Vec<_>>();
+        plot.draw(&PathElement::new(points, &RED)).unwrap();
         plot.present().unwrap();
     }
 }

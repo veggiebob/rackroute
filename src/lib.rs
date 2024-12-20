@@ -89,22 +89,21 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
         path.reverse();
         path
     };
-
+    let mut searched_nodes = 0;
     while let Some(current) = open.pop() {
-        println!("Checking node {:?}", current.node);
+        searched_nodes += 1;
         if let Some(actual_current_cost) = gscore.get(&current.node) {
             let actual_fscore = actual_current_cost.clone() + end.heuristic_cost(&current.node)?;
             if actual_fscore < current.current_cost {
                 // this is a duplicate
-                println!("Duplicate! skipping");
                 continue;
             }
         }
         if &current.node == end {
+            println!("Searched {} nodes and found a path", searched_nodes);
             return Ok(reconstruct_path(parent.clone()));
         }
         for (n, edge_cost) in current.node.get_neighbors() {
-            println!("visiting neighbor {:?}", n);
             if closed.contains(&n) {
                 // it has already been finalized/visited
                 continue;
@@ -136,5 +135,6 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
         }
         closed.insert(current.node.clone());
     }
+    println!("Searched {} nodes, no path found", searched_nodes);
     Err(Error::NoPathFound)
 }

@@ -1,9 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::ops::Sub;
 use std::rc::Rc;
-use crate::{campus_data, Error, Node};
+use crate::{Error, Node};
 use osm_xml as osm;
 use osm_xml::{Coordinate, Tag, UnresolvedReference};
 use enumflags2::{bitflags, BitFlags};
@@ -18,7 +18,7 @@ pub struct LocDelta(pub Coordinate, pub Coordinate); // these are treated as del
 
 #[bitflags]
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TransMode {
     Walk, Bike, Car
 }
@@ -37,7 +37,7 @@ pub struct Campus {
     campus_config: CampusConfig
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CampusNode {
     pub id: CampusNodeID,
     pub location: Location,
@@ -53,20 +53,22 @@ pub struct CampusEdge {
 
 #[derive(Debug)]
 pub struct CampusConfig {
-    pub carry_bike_in_car: bool
+    pub carry_bike_in_car: bool,
+    speeds: HashMap<TransMode, MetersPerSecond>
 }
 
-pub type WorldDist = f64;
-pub type WorldTime = f64;
-pub type CampusDist = (TransMode, WorldDist);
-pub type TravelCost = WorldTime;
+pub type Meters = f64; // meters
+pub type Seconds = f64; // seconds
+pub type MetersPerSecond = f64; // m/s
+pub type CampusDist = (TransMode, Meters);
+pub type TravelCost = Seconds;
 
 #[derive(Debug, Clone)]
-struct TravellerState {
+pub struct TravellerState {
     campus: Rc<Campus>,
-    me_id: CampusNodeID,
-    bike_id: CampusNodeID,
-    car_id: CampusNodeID,
+    pub me_id: CampusNodeID,
+    pub bike_id: CampusNodeID,
+    pub car_id: CampusNodeID,
 }
 
 // functions
@@ -76,6 +78,7 @@ pub enum CampusError {
     IO(std::io::Error),
     LoadMapError(osm_xml::error::Error),
     CampusReferenceError(String, Option<CampusNodeID>),
+    EmptyCampus, // there are no nodes??
     Other(String),
 }
 type Result<T> = std::result::Result<T, Error>;
@@ -94,12 +97,18 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         if let Some(edges) = edges.get_mut(&edge.start) {
             edges.push(edge);
         } else {
+            if let None = edges.get(&edge.end) {
+                // insert into edges to mark it as reachable
+                edges.insert(edge.end, vec![]);
+            }
             edges.insert(edge.start, vec![edge]);
         }
         edge_count += 1;
     };
     let check = |tags: &Vec<Tag>, key, val|
         tags.iter().any(|t| (t.key.as_str(), t.val.as_str()) == (key, val));
+    let contains = |tags: &Vec<Tag>, key|
+        tags.iter().any(|t| t.key.as_str() == key);
     for (id, node) in doc.nodes.iter() {
         nodes.insert(id.clone(), CampusNode {
             location: Location(node.lat, node.lon),
@@ -141,17 +150,26 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
             <tag k="parking" v="surface"/>
             <tag k="surface" v="asphalt"/>
          */
-        let mut modes = BitFlags::<TransMode>::default();
         let one_way = check(&way.tags, "oneway", "yes");
+        let footpath = check(&way.tags, "foot", "yes");
+        let road = check(&way.tags, "motor_vehicle", "yes");
+        let bike_path = check(&way.tags, "bicycle", "yes");
         let parking = check(&way.tags, "parking", "surface") || check(&way.tags, "amenity", "parking");
-        for t in way.tags.iter() {
-            match (t.key.as_str(), t.val.as_str()) {
-                ("foot", "yes") => modes |= TransMode::Walk,
-                ("bicycle", "yes") => modes |= TransMode::Bike,
-                ("motor_vehicle", "yes") => modes |= TransMode::Car,
-                _ => {}
-            }
+
+
+        let mut modes = BitFlags::default();
+        if footpath { modes |= TransMode::Walk; }
+        if bike_path { modes |= TransMode::Bike; }
+        if road { modes |= TransMode::Car }
+
+        if !footpath && !bike_path && !road
+            && !contains(&way.tags, "highway")
+            && !contains(&way.tags, "footway")
+            && !check(&way.tags, "route", "road") {
+            // not really the kind of way we're looking for
+            continue;
         }
+
         let mut prev_node = None;
         for i in way.nodes.iter() {
             match i {
@@ -185,6 +203,10 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
             }
         }
     }
+    nodes.retain(|n, v|
+        // only care about reachable nodes & those with a bike rack
+        edges.contains_key(n) || v.has_bike_rack()
+    );
     println!("Loaded {} nodes and {} edges", nodes.len(), edge_count);
     Ok(Campus {
         nodes,
@@ -205,15 +227,42 @@ impl From<osm::error::Error> for CampusError {
     }
 }
 impl CampusConfig {
-    pub fn get_time(&self, mode: TransMode, dist: WorldDist) -> WorldTime {
-        unimplemented!()
+    pub fn new(carry_bike_in_car: bool, walk_speed: MetersPerSecond, bike_speed: MetersPerSecond) -> CampusConfig {
+        CampusConfig {
+            carry_bike_in_car,
+            speeds: {
+                let mut speeds = HashMap::new();
+                speeds.insert(TransMode::Walk, walk_speed);
+                speeds.insert(TransMode::Bike, bike_speed);
+                speeds
+            },
+        }
+    }
+    pub fn get_time(&self, mode: &TransMode, dist: Meters) -> Seconds {
+        // dist in meters
+        // speed in meters per second
+        let speed = self.speeds.get(&mode).expect(format!("Speed missing for {:?}", &mode).as_str());
+        dist / speed
+    }
+    pub fn get_drive_time(&self, dist: Meters, speed_limit_mph: u32) -> Seconds {
+        // convert from mph to meters per second
+        // 1 mi     1 hour  1 min   1600 m
+        // 1 hour   60 min  60 sec  1 mi
+        let mps = speed_limit_mph as f64 * 1600. / 60. / 60.;
+        dist / mps
     }
 }
 
 impl Default for CampusConfig {
     fn default() -> Self {
         CampusConfig {
-            carry_bike_in_car: false
+            carry_bike_in_car: false,
+            speeds: {
+                let mut speeds = HashMap::new();
+                speeds.insert(TransMode::Walk, 1.);
+                speeds.insert(TransMode::Bike, 9.);
+                speeds
+            }
         }
     }
 }
@@ -241,15 +290,24 @@ impl Campus {
         self.nodes.get(id).ok_or(CampusError::CampusReferenceError("Node not found".to_string(), Some(id.clone())).into())
     }
 
-    pub fn get_adjacents(&self, id: &CampusNodeID) -> Vec<(&CampusEdge, &CampusNode)> {
-        todo!()
+    pub fn get_adjacents(&self, id: &CampusNodeID) -> Result<Vec<(&CampusEdge, &CampusNode)>> {
+        Ok(self.edges.get(id)
+            // .ok_or(CampusError::CampusReferenceError(format!("No edges connecting to {}", id), Some(*id)))?
+            .map(|vs| vs.iter()
+                .map(|edge|
+                    (edge, self.get_node(&edge.end).expect("Edge end not in campus")))
+                .collect())
+               .unwrap_or(vec![]))
     }
 
-    pub fn calculate_world_dist(&self, start: &CampusNodeID, end: &CampusNodeID) -> Result<WorldDist> {
+    pub fn calculate_world_dist(&self, start: &CampusNodeID, end: &CampusNodeID) -> Result<Meters> {
         Ok((self.get_node(end)?.location.clone() - &self.get_node(start)?.location).len())
     }
+    pub fn calculate_world_dist_nodes(&self, start: &CampusNode, end: &CampusNode) -> Meters {
+        (start.location.clone() - &end.location).len()
+    }
 
-    pub fn calculate_len(&self, edge: &CampusEdge) -> Result<WorldDist> {
+    pub fn calculate_len(&self, edge: &CampusEdge) -> Result<Meters> {
         Ok(self.calculate_world_dist(&edge.start, &edge.end)?)
     }
 
@@ -288,15 +346,71 @@ impl Campus {
             long >= minimum && long <= maximum
         });
     }
-}
 
+    pub fn find_closest_node(&self, location: &Location) -> Result<(&CampusNode, Meters)> {
+        let mut first = true;
+        let mut dist = 0.;
+        let mut node = None;
+        for n in self.nodes() {
+            let d = (location.clone() - &n.location).len();
+            if first || d < dist {
+                dist = d;
+                node = Some(n)
+            }
+            first = false;
+        }
+        node.map(|n| (n, dist)).ok_or(CampusError::EmptyCampus.into())
+    }
+
+    pub fn bounding_box(&self) -> BoundingBox {
+        let mut first = true;
+        let mut min_x = 0.;
+        let mut max_x = 0.;
+        let mut min_y = 0.;
+        let mut max_y = 0.;
+        for node in self.nodes() {
+            let Location(x, y) = node.location;
+            if first {
+                min_x = x;
+                max_x = x;
+                min_y = y;
+                max_y = y;
+            } else {
+                if x < min_x {
+                    min_x = x;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y < min_y {
+                    min_y = y;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+            }
+            first = false;
+        }
+        ((min_x, max_x), (min_y, max_y))
+    }
+}
+impl TravellerState {
+    pub fn new(campus: Rc<Campus>, me_id: CampusNodeID, bike_id: CampusNodeID, car_id: CampusNodeID) -> TravellerState {
+        TravellerState {
+            campus,
+            me_id,
+            bike_id,
+            car_id,
+        }
+    }
+}
 impl Node<TravelCost> for TravellerState {
     fn get_neighbors(&self) -> Vec<(TravellerState, TravelCost)> {
         let in_car = &self.car_id == &self.me_id;
         let on_bike = &self.bike_id == &self.me_id;
         let in_parking_lot = self.campus.get_node(&self.me_id).expect("Node not in campus").has_parking();
         let at_bike_rack = self.campus.get_node(&self.me_id).expect("Node not in campus").has_bike_rack();
-        let ways = self.campus.get_adjacents(&self.me_id);
+        let ways = self.campus.get_adjacents(&self.me_id).expect("Node not in campus");
         let mut neighbors = vec![];
         let new_campus = || Rc::clone(&self.campus);
         let walk_to = |id, dist, bring_bike| (TravellerState {
@@ -305,23 +419,23 @@ impl Node<TravelCost> for TravellerState {
             // you can walk with your bike on walking paths
             bike_id: if bring_bike { id } else { self.bike_id },
             car_id: self.car_id,
-        }, self.campus.campus_config.get_time(TransMode::Walk, dist));
+        }, self.campus.campus_config.get_time(&TransMode::Walk, dist));
         let bike_to = |id, dist| (TravellerState {
             campus: new_campus(),
             me_id: id,
             bike_id: id,
             car_id: self.car_id,
-        }, self.campus.campus_config.get_time(TransMode::Bike, dist));
+        }, self.campus.campus_config.get_time(&TransMode::Bike, dist));
         let drive_to = |id, dist, bring_bike|
             (TravellerState {
             campus: new_campus(),
             me_id: id,
             bike_id: if bring_bike { id } else { self.bike_id },
             car_id: id,
-        }, self.campus.campus_config.get_time(TransMode::Car, dist));
+        }, self.campus.campus_config.get_drive_time(dist, 40)); // todo: use actual speed limit
         // if we are in some sort of vehicle, we should be able to ride it
         for (edge, dest) in ways.iter() {
-            let dist: WorldDist = self.campus.calculate_len(edge).expect("Edge not in campus!");
+            let dist: Meters = self.campus.calculate_len(edge).expect("Edge not in campus!");
             if in_car {
                 if on_bike {
                     if in_parking_lot && edge.modes.contains(TransMode::Bike) {
@@ -360,7 +474,7 @@ impl Node<TravelCost> for TravellerState {
 
     fn heuristic_cost(&self, other: &Self) -> Result<TravelCost> {
         Ok(self.campus.campus_config.get_time(
-            TransMode::Walk,
+            &TransMode::Walk,
             self.campus.calculate_world_dist(&self.me_id, &other.me_id)?
         ))
     }
@@ -375,6 +489,20 @@ impl CampusNode {
     }
 }
 
+impl Hash for CampusNode {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl PartialEq for CampusNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for CampusNode {}
+
 impl Sub<&Location> for Location {
     type Output = LocDelta;
 
@@ -384,11 +512,25 @@ impl Sub<&Location> for Location {
         LocDelta(x - a, y - b)
     }
 }
+impl Location {
+    pub fn lat(&self) -> f64 {
+        self.0
+    }
+    pub fn lng(&self) -> f64 {
+        self.1
+    }
+}
 
 impl LocDelta {
-    pub fn len(&self) -> WorldDist {
-        let LocDelta(x, y) = self;
-        ((*x) * (*x) + (*y) * (*y)).sqrt()
+    pub fn len(&self) -> Meters {
+        let (x, y) = self.get_meters();
+        (x * x + y * y).sqrt()
+    }
+    pub fn get_meters(&self) -> (Meters, Meters) {
+        let lat_to_m = 111. * 1000.;
+        let long_to_m = 111. * 1000.;
+        let LocDelta(lat, long) = self;
+        (lat * lat_to_m, long * long_to_m)
     }
 }
 
@@ -397,3 +539,5 @@ impl From<CampusError> for Error {
         Error::CampusError(value)
     }
 }
+
+pub type BoundingBox = ((Coordinate, Coordinate), (Coordinate, Coordinate));
