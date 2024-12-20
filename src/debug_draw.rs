@@ -2,6 +2,7 @@ use std::rc::Rc;
 use osm_xml::Coordinate;
 use plotters::coord::Shift;
 use plotters::prelude::*;
+use plotters::style::full_palette::BROWN;
 use crate::campus_data::{BoundingBox, Campus, Location};
 use crate::Error;
 
@@ -43,14 +44,14 @@ pub fn create_campus_drawing(campus: Rc<Campus>) -> Result<(DrawingArea<BitMapBa
     }
     for point in campus.nodes() {
         let (x, y) = map_loc(&point.location);
-        let style = if point.has_bike_rack() {
-            &GREEN
+        let (radius, style) = if point.has_bike_rack() {
+            (3, &GREEN)
         } else if point.has_parking() {
-            &BLUE
+            (3, &BLUE)
         } else {
-            continue;
+            (1, &BROWN)
         };
-        root.draw(&Circle::new((x, y), 3, style))?;
+        root.draw(&Circle::new((x, y), radius, style))?;
     }
     Ok((root, bb))
 }
@@ -86,24 +87,25 @@ mod tests {
         // sample start: 43.08436913213423, -77.67268359047404
         // sample end: 43.08235610659231, -77.68296257654112
         // sample parking: 43.08174191943827, -77.6802958319057
-        let start_loc = Location(43.08436913213423, -77.67268359047404);
-        let end_loc = Location(43.08235610659231, -77.68296257654112);
-        // let end_loc = Location(43.084447647668995, -77.67436324397717);
-        let parking_loc = Location(43.08174191943827, -77.6802958319057);
+        let start_loc = Location(43.06162801695506, -77.69172507479415); // the lodge
+        let end_loc = Location(43.08235610659231, -77.68296257654112); // somewhere in the frats
         let (start_node, dist_start) = campus.find_closest_node(&start_loc).unwrap();
         let (end_node, dist_end) = campus.find_closest_node(&end_loc).unwrap();
-        let (parking_node, dist_park) = campus.find_closest_node(&parking_loc).unwrap();
+        let (bike_park_node, dist_bike) = campus.find_closest_node_with(&start_loc, |n| n.has_bike_rack()).unwrap();
+        let (parking_node, dist_park) = campus.find_closest_node_with(&start_loc, |n| n.has_parking()).unwrap();
         plot.draw(&Circle::new(coord_map(&start_node.location), 2, &RED)).unwrap();
         plot.draw(&Circle::new(coord_map(&end_node.location), 2, &RED)).unwrap();
+        plot.draw(&Circle::new(coord_map(&bike_park_node.location), 2, &RED)).unwrap();
         plot.draw(&Circle::new(coord_map(&parking_node.location), 2, &RED)).unwrap();
         let start_id = start_node.id;
         let end_id = end_node.id;
+        let bike_id = bike_park_node.id;
         let park_id = parking_node.id;
         println!("Found nodes within {} and {} and {}", dist_start, dist_end, dist_park);
 
         println!("Finding path...");
-        let start_state = TravellerState::new(Rc::clone(&campus), start_id, 0, 0);
-        let end_state = TravellerState::new(Rc::clone(&campus), end_id, 0, 0);
+        let start_state = TravellerState::new(Rc::clone(&campus), start_id, bike_id, park_id);
+        let end_state = TravellerState::new(Rc::clone(&campus), end_id, bike_id, park_id);
         plot.present().unwrap();
         let path = find_path(&start_state, &end_state).unwrap();
         println!("Path found with {} nodes", path.len());

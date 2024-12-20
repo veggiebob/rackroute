@@ -1,0 +1,13 @@
+3. keep track of non-travellable features for visual aid (in Campus)
+6. figure out how to make the graph gradually, fully connected
+    - this is the min-connection problem
+    - run connected components - O(m + n)
+    - connect the closest components - O(n^2)
+    - connect them using "bushwacking" or something
+    - always connect smallest distance between them, but also connect anything under a certain distance threshold
+    - say, 20 ft (and only on different components)
+4. draw different paths different colors (walkways, bikeways, etc.)
+5. Recover "directions" using state path transitions
+    - when we were riding bike / driving car
+    - when we parked bike / car
+    - use these to paint the path

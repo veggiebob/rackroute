@@ -163,6 +163,7 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         if road { modes |= TransMode::Car }
 
         if !footpath && !bike_path && !road
+            && !parking
             && !contains(&way.tags, "highway")
             && !contains(&way.tags, "footway")
             && !check(&way.tags, "route", "road") {
@@ -208,11 +209,40 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         edges.contains_key(n) || v.has_bike_rack()
     );
     println!("Loaded {} nodes and {} edges", nodes.len(), edge_count);
-    Ok(Campus {
+    let mut campus = Campus {
         nodes,
         edges,
         campus_config: config,
-    })
+    };
+    let mut bike_rack_edges_added = 0;
+    let mut edges_to_add = vec![];
+    for node in campus.nodes() {
+        if node.has_bike_rack() {
+            let needs_connection = match campus.get_adjacents(&node.id) {
+                Ok(es) => es.is_empty(),
+                _ => true
+            };
+            if needs_connection {
+                // add a 2-way walking & biking connection to the nearest node
+                let ok = campus.find_closest_node_with(&node.location, |n| &n.id != &node.id)
+                    .map(|(n, _)| {
+                        edges_to_add.push((node.id.clone(), n.id.clone(), TransMode::Walk | TransMode::Bike));
+                        edges_to_add.push((n.id.clone(), node.id.clone(), TransMode::Walk | TransMode::Bike));
+                    })
+                    // say something if it couldn't be connected
+                    .inspect_err(|e| println!("Could not connect bike rack {}: {:?}", &node.id, e))
+                    .ok();
+                if ok.is_some() {
+                    bike_rack_edges_added += 1;
+                }
+            }
+        }
+    }
+    for (start, end, modes) in edges_to_add {
+        campus.add_edge(start, end, modes);
+    }
+    println!("Added {} edges to connect bike racks", bike_rack_edges_added);
+    Ok(campus)
 }
 
 // ----------------- impls --------------------------------
@@ -362,6 +392,25 @@ impl Campus {
         node.map(|n| (n, dist)).ok_or(CampusError::EmptyCampus.into())
     }
 
+    pub fn find_closest_node_with<F>(&self, location: &Location, criterion: F) -> Result<(&CampusNode, Meters)>
+        where F: Fn(&CampusNode) -> bool {
+        let mut first = true;
+        let mut dist = 0.;
+        let mut node = None;
+        for n in self.nodes() {
+            if !criterion(n) {
+                continue;
+            }
+            let d = (location.clone() - &n.location).len();
+            if first || d < dist {
+                dist = d;
+                node = Some(n)
+            }
+            first = false;
+        }
+        node.map(|n| (n, dist)).ok_or(CampusError::EmptyCampus.into())
+    }
+
     pub fn bounding_box(&self) -> BoundingBox {
         let mut first = true;
         let mut min_x = 0.;
@@ -392,6 +441,15 @@ impl Campus {
             first = false;
         }
         ((min_x, max_x), (min_y, max_y))
+    }
+
+    pub fn add_edge(&mut self, start: CampusNodeID, end: CampusNodeID, modes: BitFlags<TransMode>) {
+        self.edges.entry(start).or_insert(vec![]).push(CampusEdge {
+            start,
+            end,
+            modes
+        });
+        self.edges.entry(end).or_insert(vec![]);
     }
 }
 impl TravellerState {
