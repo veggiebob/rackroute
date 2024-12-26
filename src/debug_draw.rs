@@ -1,6 +1,5 @@
 use std::rc::Rc;
 use full_palette::GREY;
-use osm_xml::Coordinate;
 use plotters::coord::Shift;
 use plotters::prelude::*;
 use plotters::style::full_palette::BROWN;
@@ -24,7 +23,7 @@ fn map_to_screen(bb: BoundingBox, screen_dims: (u32, u32)) -> Box<dyn Fn(&Locati
     Box::new(map_loc)
 }
 
-pub fn create_campus_drawing(campus: Rc<Campus>) -> Result<(DrawingArea<BitMapBackend<'static>, Shift>, BoundingBox), Error> {
+pub fn create_campus_drawing(campus: Rc<Campus>, filepath: &'static str) -> Result<(DrawingArea<BitMapBackend<'static>, Shift>, BoundingBox), Error> {
     let bb = campus.bounding_box();
     let size_ratio = 1920. / (bb.1.1 - bb.1.0);
     let width: i32 = (size_ratio * (bb.1.1 - bb.1.0)) as i32;
@@ -32,7 +31,7 @@ pub fn create_campus_drawing(campus: Rc<Campus>) -> Result<(DrawingArea<BitMapBa
     let map_loc = map_to_screen(bb, (width as u32, height as u32));
     println!("Bounding box is {:?}", bb);
 
-    let root = BitMapBackend::new("debug/1.png", (width as u32, height as u32)).into_drawing_area();
+    let root = BitMapBackend::new(filepath, (width as u32, height as u32)).into_drawing_area();
     root.fill(&WHITE)?;
     let draw_line = |(x1, y1): (&i32, &i32), (x2, y2): (&i32, &i32), style|
         root.draw(&PathElement::new(vec![(*x1, *y1), (*x2, *y2)], style));
@@ -54,7 +53,7 @@ pub fn create_campus_drawing(campus: Rc<Campus>) -> Result<(DrawingArea<BitMapBa
         let (radius, style) = if point.has_bike_rack() {
             (3, &GREEN)
         } else if point.has_parking() {
-            (3, &BLUE)
+            (3, &YELLOW)
         } else {
             (1, &BROWN)
         };
@@ -72,22 +71,57 @@ impl<DB: std::error::Error + Send + Sync> From<DrawingAreaErrorKind<DB>> for Err
 // tests
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::rc::Rc;
+    use rand::prelude::SliceRandom;
     use crate::campus_data::{read_osm_data, TravellerState};
     use crate::{find_path};
+    use crate::map_optimization::connected_components;
     use super::*;
+
+    #[test]
+    fn test_components() {
+        let campus = read_osm_data("./data/rit-bigger.osm", Default::default())
+            .unwrap();
+        let components = connected_components(&campus);
+        let campus = Rc::new(campus);
+        let (plot, bb) = create_campus_drawing(Rc::clone(&campus), "debug/components.png").unwrap();
+        let coord_map = map_to_screen(bb, plot.dim_in_pixel());
+
+        fn generate_colorset(n: u32) -> Vec<HSLColor> {
+            let mut colors = Vec::new();
+            for i in 0..n {
+                let hue = i as f64 / n as f64;
+                let color = HSLColor(hue, 1.0, 0.5);
+                colors.push(color);
+            }
+            // randomize order
+            colors.shuffle(&mut rand::thread_rng());
+            colors
+        }
+
+        let group_num = components.values().collect::<HashSet<_>>().len();
+        println!("Found {} groups", group_num);
+        let colors = generate_colorset(group_num as u32);
+        for (node, group) in components {
+            let color = colors[group as usize - 1];
+            let (x, y) = coord_map(&campus.get_node(&node).unwrap().location);
+            plot.draw(&Circle::new((x, y), 2, &color)).unwrap();
+        }
+        plot.present().unwrap();
+    }
 
     #[test]
     fn test_main() {
         // lat: [43.05371, 43.09635]
         // long: [-77.70424, -77.64793]
         println!("Loading campus...");
-        let mut campus = read_osm_data("data/rit-bigger-rog.osm", Default::default()).unwrap();
+        let mut campus = read_osm_data("data/rit-bigger.osm", Default::default()).unwrap();
         campus.crop_latitudes(43.05371, 43.09635);
         campus.crop_longitudes(-77.70424, -77.64793);
         let campus = Rc::new(campus);
         println!("Drawing campus...");
-        let (plot, bb) = create_campus_drawing(Rc::clone(&campus)).unwrap();
+        let (plot, bb) = create_campus_drawing(Rc::clone(&campus), "debug/main.png").unwrap();
         let coord_map = map_to_screen(bb, plot.dim_in_pixel());
 
         println!("Finding start and end nodes...");
