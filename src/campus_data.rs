@@ -20,7 +20,7 @@ pub struct LocDelta(pub Coordinate, pub Coordinate); // these are treated as del
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TransMode {
-    Walk, Bike, Car
+    Walk, Bike, Car, Bushwhack
 }
 
 #[bitflags]
