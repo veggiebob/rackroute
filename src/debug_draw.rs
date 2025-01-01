@@ -1,10 +1,34 @@
+use std::borrow::Borrow;
+use std::collections::HashSet;
 use std::rc::Rc;
 use full_palette::GREY;
+use osm_xml::Coordinate;
 use plotters::coord::Shift;
 use plotters::prelude::*;
 use plotters::style::full_palette::BROWN;
-use crate::campus_data::{BoundingBox, Campus, Location};
+use rand::seq::SliceRandom;
+use crate::campus_data::{read_osm_data, BoundingBox, Campus, Location};
 use crate::Error;
+use crate::map_optimization::connected_components;
+
+
+struct PlotOptions {
+    pub width: u32,
+    pub draw_parking: bool,
+    pub draw_bike_racks: bool,
+    pub draw_nodes: bool
+}
+
+impl Default for PlotOptions {
+    fn default() -> Self {
+        PlotOptions {
+            width: 1920,
+            draw_parking: true,
+            draw_bike_racks: true,
+            draw_nodes: true
+        }
+    }
+}
 
 fn aspect_ratio(bb: BoundingBox) -> f32 {
     let ((min_x, max_x), (min_y, max_y)) = bb;
@@ -23,9 +47,12 @@ fn map_to_screen(bb: BoundingBox, screen_dims: (u32, u32)) -> Box<dyn Fn(&Locati
     Box::new(map_loc)
 }
 
-pub fn create_campus_drawing(campus: Rc<Campus>, filepath: &'static str) -> Result<(DrawingArea<BitMapBackend<'static>, Shift>, BoundingBox), Error> {
+pub fn create_campus_drawing<C>(campus: C, filepath: &'static str, plot_options: &PlotOptions) -> Result<(DrawingArea<BitMapBackend<'static>, Shift>, BoundingBox), Error>
+    where C: Borrow<Campus>
+{
+    let campus = campus.borrow();
     let bb = campus.bounding_box();
-    let size_ratio = 1920. / (bb.1.1 - bb.1.0);
+    let size_ratio = plot_options.width as Coordinate / (bb.1.1 - bb.1.0);
     let width: i32 = (size_ratio * (bb.1.1 - bb.1.0)) as i32;
     let height: i32 = (size_ratio * (bb.0.1 - bb.0.0)) as i32;
     let map_loc = map_to_screen(bb, (width as u32, height as u32));
@@ -50,16 +77,56 @@ pub fn create_campus_drawing(campus: Rc<Campus>, filepath: &'static str) -> Resu
     }
     for point in campus.nodes() {
         let (x, y) = map_loc(&point.location);
-        let (radius, style) = if point.has_bike_rack() {
-            (3, &GREEN)
+        let (radius, style, do_draw) = if point.has_bike_rack() {
+            (3, &GREEN, plot_options.draw_bike_racks)
         } else if point.has_parking() {
-            (3, &YELLOW)
+            (3, &YELLOW, plot_options.draw_parking)
         } else {
-            (1, &BROWN)
+            (1, &BROWN, plot_options.draw_nodes)
         };
-        root.draw(&Circle::new((x, y), radius, style))?;
+        if do_draw {
+            root.draw(&Circle::new((x, y), radius, style))?;
+        }
     }
     Ok((root, bb))
+}
+
+fn generate_colorset(n: u32) -> Vec<HSLColor> {
+    let mut colors = Vec::new();
+    for i in 0..n {
+        let hue = i as f64 / n as f64;
+        let color = HSLColor(hue, 1.0, 0.5);
+        colors.push(color);
+    }
+    // randomize order
+    colors.shuffle(&mut rand::thread_rng());
+    colors
+}
+
+pub fn draw_campus_components<C>(campus: C, filepath: &'static str) -> Result<(DrawingArea<BitMapBackend<'static>, Shift>, BoundingBox), Error>
+    where C: Borrow<Campus>
+{
+    let campus = campus.borrow();
+    let components = connected_components(campus);
+    let plot_options = PlotOptions {
+        draw_nodes: false,
+        draw_bike_racks: false,
+        draw_parking: false,
+        width: 1920
+    };
+    let (plot, bb) = create_campus_drawing(campus, filepath, &plot_options)?;
+    let coord_map = map_to_screen(bb, plot.dim_in_pixel());
+
+    let group_num = components.values().collect::<HashSet<_>>().len();
+    println!("Found {} groups", group_num);
+    let colors = generate_colorset(group_num as u32);
+    for (node, group) in components {
+        let color = colors[group as usize - 1];
+        let (x, y) = coord_map(&campus.get_node(&node)?.location);
+        plot.draw(&Circle::new((x, y), 2, &color))?;
+    }
+    plot.present()?;
+    Ok((plot, bb))
 }
 
 impl<DB: std::error::Error + Send + Sync> From<DrawingAreaErrorKind<DB>> for Error {
@@ -71,44 +138,20 @@ impl<DB: std::error::Error + Send + Sync> From<DrawingAreaErrorKind<DB>> for Err
 // tests
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::rc::Rc;
-    use rand::prelude::SliceRandom;
     use crate::campus_data::{read_osm_data, TravellerState};
     use crate::{find_path};
-    use crate::map_optimization::connected_components;
     use super::*;
 
     #[test]
     fn test_components() {
         let campus = read_osm_data("./data/rit-bigger.osm", Default::default())
             .unwrap();
-        let components = connected_components(&campus);
-        let campus = Rc::new(campus);
-        let (plot, bb) = create_campus_drawing(Rc::clone(&campus), "debug/components.png").unwrap();
-        let coord_map = map_to_screen(bb, plot.dim_in_pixel());
-
-        fn generate_colorset(n: u32) -> Vec<HSLColor> {
-            let mut colors = Vec::new();
-            for i in 0..n {
-                let hue = i as f64 / n as f64;
-                let color = HSLColor(hue, 1.0, 0.5);
-                colors.push(color);
-            }
-            // randomize order
-            colors.shuffle(&mut rand::thread_rng());
-            colors
-        }
-
-        let group_num = components.values().collect::<HashSet<_>>().len();
-        println!("Found {} groups", group_num);
-        let colors = generate_colorset(group_num as u32);
-        for (node, group) in components {
-            let color = colors[group as usize - 1];
-            let (x, y) = coord_map(&campus.get_node(&node).unwrap().location);
-            plot.draw(&Circle::new((x, y), 2, &color)).unwrap();
-        }
-        plot.present().unwrap();
+        draw_campus_components(&campus, "debug/components-before.png").unwrap();
+        let mut m_campus = campus;
+        m_campus.make_strongly_connected(None);
+        let campus = m_campus;
+        draw_campus_components(&campus, "debug/components-after.png").unwrap();
     }
 
     #[test]
@@ -119,16 +162,20 @@ mod tests {
         let mut campus = read_osm_data("data/rit-bigger.osm", Default::default()).unwrap();
         campus.crop_latitudes(43.05371, 43.09635);
         campus.crop_longitudes(-77.70424, -77.64793);
+        campus.make_strongly_connected(None);
         let campus = Rc::new(campus);
         println!("Drawing campus...");
-        let (plot, bb) = create_campus_drawing(Rc::clone(&campus), "debug/main.png").unwrap();
+        let (plot, bb) = create_campus_drawing(
+            Rc::clone(&campus),
+            "debug/main.png",
+            &PlotOptions::default()).unwrap();
         let coord_map = map_to_screen(bb, plot.dim_in_pixel());
 
         println!("Finding start and end nodes...");
         // sample start: 43.08436913213423, -77.67268359047404
         // sample end: 43.08235610659231, -77.68296257654112
         // sample parking: 43.08174191943827, -77.6802958319057
-        let start_loc = Location(43.06162801695506, -77.69172507479415); // the lodge
+        let start_loc = Location(43.060872902944546, -77.69401222765408); // the lodge
         let end_loc = Location(43.08235610659231, -77.68296257654112); // somewhere in the frats
         let (start_node, dist_start) = campus.find_closest_node(&start_loc).unwrap();
         let (end_node, dist_end) = campus.find_closest_node(&end_loc).unwrap();
@@ -150,6 +197,8 @@ mod tests {
         plot.present().unwrap();
         let path = find_path(&start_state, &end_state).unwrap();
         println!("Path found with {} nodes", path.len());
+
+        let (bike, car, walk) = ("🚲", "🚗", "🚶");
 
         println!("Drawing path...");
         let points = path.iter().map(|node| coord_map(&campus.get_node(&node.me_id).unwrap().location)).collect::<Vec<_>>();

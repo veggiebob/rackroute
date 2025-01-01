@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use crate::campus_data::{Campus, CampusNodeID, Meters};
+use crate::campus_data::{Campus, CampusNodeID, Meters, TransMode};
 use crate::Location;
 
 //
@@ -34,17 +34,20 @@ pub fn connected_components(campus: &Campus) -> HashMap<CampusNodeID, GroupID> {
         while let Some(n) = stack.pop() {
             if visited.contains(&n) { continue }
             visited.insert(n);
+
             if let Some(n_gid) = group.get(&n) {
-                if n_gid != &gid {
+                let mut o_parent = gid;
+                while let Some(Some(p)) = group_parent.get(&o_parent) {
+                    if o_parent == *p { break }
+                    o_parent = *p;
+                }
+                let mut c_parent = *n_gid;
+                while let Some(Some(p)) = group_parent.get(&c_parent) {
+                    if c_parent == *p { break }
+                    c_parent = *p;
+                }
+                if o_parent != c_parent {
                     // make the parent of the smaller one the parent of the bigger one
-                    let mut o_parent = gid;
-                    while let Some(Some(p)) = group_parent.get(&o_parent) {
-                        o_parent = *p;
-                    }
-                    let mut c_parent = *n_gid;
-                    while let Some(Some(p)) = group_parent.get(&c_parent) {
-                        c_parent = *p;
-                    }
                     let o_size = group_size.get(&o_parent).expect(err_msg);
                     let c_size = group_size.get(&c_parent).expect(err_msg);
                     let (s_parent, b_parent) = if o_size < c_size {
@@ -197,7 +200,7 @@ pub fn get_new_edges(campus: &Campus, relaxation: Option<f64>) -> Vec<(CampusNod
 #[cfg(test)]
 mod test {
     use crate::*;
-    use crate::campus_data::read_osm_data;
+    use crate::campus_data::{read_osm_data, TransMode};
     use crate::map_optimization::{connected_components, get_new_edges};
 
     #[test]
@@ -207,9 +210,18 @@ mod test {
         let groups = connected_components(&campus);
         // println!("{:?}", groups);
         let group_set = groups.values().collect::<HashSet<_>>();
-        println!("{}", group_set.len());
+        println!("original # of components: {}", group_set.len());
 
         let new_edges = get_new_edges(&campus, None);
         println!("{} new edges", new_edges.len());
+        let mut m_campus = campus;
+        for (a, b) in new_edges {
+            m_campus.add_edge(a, b, TransMode::Bushwhack.into());
+        }
+        let campus = m_campus;
+        let groups = connected_components(&campus);
+        let group_set = groups.values().collect::<HashSet<_>>();
+        println!("new # of components: {}", group_set.len());
+        assert!(group_set.len() <= 1);
     }
 }

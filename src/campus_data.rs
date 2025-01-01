@@ -7,6 +7,7 @@ use crate::{Error, Node};
 use osm_xml as osm;
 use osm_xml::{Coordinate, Tag, UnresolvedReference};
 use enumflags2::{bitflags, BitFlags};
+use crate::map_optimization::get_new_edges;
 
 pub type CampusNodeID = osm::Id;
 
@@ -459,6 +460,14 @@ impl Campus {
             modes
         });
         self.edges.entry(end).or_insert(vec![]);
+    }
+
+    pub fn make_strongly_connected(&mut self, relaxation: Option<f64>) {
+        let new_edges = get_new_edges(self, relaxation);
+        for (a, b) in new_edges {
+            self.add_edge(a, b, TransMode::Bushwhack.into());
+            self.add_edge(b, a, TransMode::Bushwhack.into());
+        }
     }
 }
 impl TravellerState {
