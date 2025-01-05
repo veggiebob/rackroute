@@ -199,6 +199,7 @@ pub fn get_new_edges(campus: &Campus, relaxation: Option<f64>) -> Vec<(CampusNod
 
 #[cfg(test)]
 mod test {
+    use enumflags2::BitFlags;
     use crate::*;
     use crate::campus_data::{read_osm_data, TransMode};
     use crate::map_optimization::{connected_components, get_new_edges};
@@ -216,7 +217,7 @@ mod test {
         println!("{} new edges", new_edges.len());
         let mut m_campus = campus;
         for (a, b) in new_edges {
-            m_campus.add_edge(a, b, TransMode::Bushwhack.into());
+            m_campus.add_edge(a, b, TransMode::Bushwhack.into(), BitFlags::default());
         }
         let campus = m_campus;
         let groups = connected_components(&campus);

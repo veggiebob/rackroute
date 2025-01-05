@@ -1,12 +1,14 @@
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
-use std::ops::Sub;
+use std::ops::{Add, Div, Index, Mul, Sub};
 use std::rc::Rc;
 use crate::{Error, Node};
 use osm_xml as osm;
 use osm_xml::{Coordinate, Tag, UnresolvedReference};
 use enumflags2::{bitflags, BitFlags};
+use geo::{Contains, LineString};
 use crate::map_optimization::get_new_edges;
 
 pub type CampusNodeID = osm::Id;
@@ -47,11 +49,13 @@ pub struct CampusNode {
 }
 
 pub type SimpleEdge = (Location, Location);
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CampusEdge {
     pub start: CampusNodeID,
     pub end: CampusNodeID,
-    pub modes: BitFlags<TransMode>
+    pub modes: BitFlags<TransMode>,
+    pub amenities: BitFlags<Amenities>,
+    pub metadata: HashMap<String, String>
 }
 
 #[derive(Debug)]
@@ -86,6 +90,8 @@ pub enum CampusError {
 }
 type Result<T> = std::result::Result<T, Error>;
 
+
+
 /// Reads OSM XML file generated using OpenStreetMap.
 /// See more at https://www.openstreetmap.org/about
 /// If you're unsure about the config, just use the default
@@ -113,6 +119,7 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         tags.iter().any(|t| (t.key.as_str(), t.val.as_str()) == (key, val));
     let contains = |tags: &Vec<Tag>, key|
         tags.iter().any(|t| t.key.as_str() == key);
+    let get_val = |tags: &Vec<Tag>, key| tags.iter().find(|t| t.key.as_str() == key).map(|t| t.val.clone());
     for (id, node) in doc.nodes.iter() {
         nodes.insert(id.clone(), CampusNode {
             location: Location(node.lat, node.lon),
@@ -126,6 +133,7 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         // amenity: bicycle_parking
         // bicycle_parking: wall_loops
     }
+    let mut parking_polygons = vec![];
     for (_id, way) in doc.ways.iter() {
         /*
         other interesting information:
@@ -173,6 +181,30 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
             && !check(&way.tags, "route", "road");
 
         let mut prev_node = None;
+        if parking {
+            let coords = way.nodes.iter()
+                .filter_map(|n| {
+                    if let UnresolvedReference::Node(n) = n {
+                        nodes.get(n).map(|n| n.location.clone())
+                    } else {
+                        None
+                    }
+                })
+                .map(|location| geo::Coord { x: location.0, y: location.1 })
+                .collect::<Vec<_>>();
+            let polygon = geo::Polygon::new(LineString::new(coords), vec![]);
+            parking_polygons.push(polygon);
+        }
+
+        let name = get_val(&way.tags, "name");
+
+        let metadata = {
+            let mut map = HashMap::new();
+            if let Some(name) = name {
+                map.insert("name".to_string(), name);
+            }
+            map
+        };
         for i in way.nodes.iter() {
             match i {
                 UnresolvedReference::Node(n) => {
@@ -187,13 +219,17 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
                             add_edge(CampusEdge {
                                 start: pnode,
                                 end: n.clone(),
-                                modes: modes.clone()
+                                modes: modes.clone(),
+                                metadata: metadata.clone(),
+                                ..Default::default()
                             });
                             if !one_way {
                                 add_edge(CampusEdge {
                                     start: n.clone(),
                                     end: pnode,
-                                    modes: modes.clone()
+                                    modes: modes.clone(),
+                                    metadata: metadata.clone(),
+                                    ..Default::default()
                                 });
                             }
                             if parking {
@@ -217,6 +253,25 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         // only care about reachable nodes & those with a bike rack
         edges.contains_key(n) || v.has_bike_rack()
     );
+    let node_error = |id| CampusError::CampusReferenceError("Node not found".to_string(), Some(id));
+    for poly in parking_polygons {
+        for (_id, node) in nodes.iter_mut() {
+            if poly.contains(&geo::Point::new(node.location.0, node.location.1)) {
+                node.amenities |= Amenities::Parking;
+            }
+        }
+        for edge in edges.values().flatten() {
+            let start = nodes[&edge.start].location.clone();
+            let end = nodes[&edge.end].location.clone();
+            let mid = start.clone() + (end.clone() - &start) * 0.5;
+            if poly.contains(&geo::Point::new(mid.0, mid.1))
+                || poly.contains(&geo::Point::new(start.0, start.1))
+                || poly.contains(&geo::Point::new(end.0, end.1)) {
+                nodes.get_mut(&edge.start).map(|n| n.amenities |= Amenities::Parking);
+                nodes.get_mut(&edge.end).map(|n| n.amenities |= Amenities::Parking);
+            }
+        }
+    }
     println!("Loaded {} nodes and {} edges", nodes.len(), edge_count);
     let mut campus = Campus {
         nodes,
@@ -249,7 +304,7 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         }
     }
     for (start, end, modes) in edges_to_add {
-        campus.add_edge(start, end, modes);
+        campus.add_edge(start, end, modes, BitFlags::default());
     }
     println!("Added {} edges to connect bike racks", bike_rack_edges_added);
     Ok(campus)
@@ -301,6 +356,7 @@ impl Default for CampusConfig {
                 let mut speeds = HashMap::new();
                 speeds.insert(TransMode::Walk, 1.);
                 speeds.insert(TransMode::Bike, 9.);
+                speeds.insert(TransMode::Bushwhack, 0.7);
                 speeds
             }
         }
@@ -453,23 +509,38 @@ impl Campus {
         ((min_x, max_x), (min_y, max_y))
     }
 
-    pub fn add_edge(&mut self, start: CampusNodeID, end: CampusNodeID, modes: BitFlags<TransMode>) {
+    pub fn add_edge(&mut self, start: CampusNodeID, end: CampusNodeID, modes: BitFlags<TransMode>, amenities: BitFlags<Amenities>) {
         self.edges.entry(start).or_insert(vec![]).push(CampusEdge {
             start,
             end,
-            modes
+            modes,
+            amenities,
+            ..Default::default()
         });
         self.edges.entry(end).or_insert(vec![]);
+    }
+
+    pub fn find_edge(&self, start: &CampusNodeID, end: &CampusNodeID) -> Option<&CampusEdge> {
+        self.edges.get(start)?.iter().find(|e| &e.end == end)
     }
 
     pub fn make_strongly_connected(&mut self, relaxation: Option<f64>) {
         let new_edges = get_new_edges(self, relaxation);
         for (a, b) in new_edges {
-            self.add_edge(a, b, TransMode::Bushwhack.into());
-            self.add_edge(b, a, TransMode::Bushwhack.into());
+            self.add_edge(a, b, TransMode::Bushwhack.into(), BitFlags::default());
+            self.add_edge(b, a, TransMode::Bushwhack.into(), BitFlags::default());
         }
     }
 }
+
+impl Index<CampusNodeID> for Campus {
+    type Output = CampusNode;
+
+    fn index(&self, index: CampusNodeID) -> &Self::Output {
+        self.get_node(&index).expect(format!("Node {} not found", index).as_str())
+    }
+}
+
 impl TravellerState {
     pub fn new(campus: Rc<Campus>, me_id: CampusNodeID, bike_id: CampusNodeID, car_id: CampusNodeID) -> TravellerState {
         TravellerState {
@@ -509,6 +580,12 @@ impl Node<TravelCost> for TravellerState {
             bike_id: if bring_bike { id } else { self.bike_id },
             car_id: id,
         }, self.campus.campus_config.get_drive_time(dist, 40)); // todo: use actual speed limit
+        let bushwhack_to = |id, dist| (TravellerState {
+            campus: new_campus(),
+            me_id: id,
+            bike_id: self.bike_id,
+            car_id: self.car_id,
+        }, self.campus.campus_config.get_time(&TransMode::Bushwhack, dist));
         // if we are in some sort of vehicle, we should be able to ride it
         for (edge, dest) in ways.iter() {
             let dist: Meters = self.campus.calculate_len(edge).expect("Edge not in campus!");
@@ -542,6 +619,7 @@ impl Node<TravelCost> for TravellerState {
                     }
                 } else {
                     neighbors.push(walk_to(dest.id, dist, false));
+                    neighbors.push(bushwhack_to(dest.id, dist));
                 }
             }
         }
@@ -579,6 +657,28 @@ impl PartialEq for CampusNode {
 
 impl Eq for CampusNode {}
 
+impl CampusEdge {
+    pub fn get_midpoint<C: Borrow<Campus>>(&self, campus: C) -> Location {
+        let campus = campus.borrow();
+        let start = campus[self.start].location.clone();
+        let end = campus[self.end].location.clone();
+        start.clone() + (end - &start) * 0.5f64
+    }
+    pub fn get_name(&self) -> Option<&String> {
+        self.metadata.get("name")
+    }
+}
+
+impl Add<LocDelta> for Location {
+    type Output = Location;
+
+    fn add(self, rhs: LocDelta) -> Self::Output {
+        let Location(a, b) = self;
+        let LocDelta(x, y) = rhs;
+        Location(a + x, b + y)
+    }
+}
+
 impl Sub<&Location> for Location {
     type Output = LocDelta;
 
@@ -607,6 +707,24 @@ impl LocDelta {
         let long_to_m = 111. * 1000.;
         let LocDelta(lat, long) = self;
         (lat * lat_to_m, long * long_to_m)
+    }
+}
+
+impl Div<f64> for LocDelta {
+    type Output = LocDelta;
+
+    fn div(self, rhs: f64) -> Self::Output {
+        let LocDelta(lat, long) = self;
+        LocDelta(lat / rhs, long / rhs)
+    }
+}
+
+impl Mul<f64> for LocDelta {
+    type Output = LocDelta;
+
+    fn mul(self, rhs: f64) -> Self::Output {
+        let LocDelta(lat, long) = self;
+        LocDelta(lat * rhs, long * rhs)
     }
 }
 

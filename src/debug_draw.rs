@@ -141,6 +141,7 @@ mod tests {
     use std::rc::Rc;
     use crate::campus_data::{read_osm_data, TravellerState};
     use crate::{find_path};
+    use crate::campus_directions::get_path_traversal_description;
     use super::*;
 
     #[test]
@@ -175,34 +176,37 @@ mod tests {
         // sample start: 43.08436913213423, -77.67268359047404
         // sample end: 43.08235610659231, -77.68296257654112
         // sample parking: 43.08174191943827, -77.6802958319057
-        let start_loc = Location(43.060872902944546, -77.69401222765408); // the lodge
+        let start_loc = Location(43.06209938987821, -77.69455531278473); // the lodge
         let end_loc = Location(43.08235610659231, -77.68296257654112); // somewhere in the frats
         let (start_node, dist_start) = campus.find_closest_node(&start_loc).unwrap();
         let (end_node, dist_end) = campus.find_closest_node(&end_loc).unwrap();
         let (bike_park_node, dist_bike) = campus.find_closest_node_with(&start_loc, |n| n.has_bike_rack()).unwrap();
         let (parking_node, dist_park) = campus.find_closest_node_with(&start_loc, |n| n.has_parking()).unwrap();
+        let (end_park_node, dist_end_park) = campus.find_closest_node_with(&end_loc, |n| n.has_parking()).unwrap();
         plot.draw(&Circle::new(coord_map(&start_node.location), 2, &RED)).unwrap();
         plot.draw(&Circle::new(coord_map(&end_node.location), 2, &RED)).unwrap();
         plot.draw(&Circle::new(coord_map(&bike_park_node.location), 2, &RED)).unwrap();
         plot.draw(&Circle::new(coord_map(&parking_node.location), 2, &RED)).unwrap();
+        plot.draw(&Circle::new(coord_map(&end_park_node.location), 2, &RED)).unwrap();
         let start_id = start_node.id;
         let end_id = end_node.id;
         let bike_id = bike_park_node.id;
         let park_id = parking_node.id;
+        let end_park_id = end_park_node.id;
         println!("Found nodes within {} and {} and {}", dist_start, dist_end, dist_park);
+        println!("Car at {}, Bike at {}, start at {}, end at {}", park_id, bike_id, start_id, end_id);
 
         println!("Finding path...");
         let start_state = TravellerState::new(Rc::clone(&campus), start_id, bike_id, park_id);
-        let end_state = TravellerState::new(Rc::clone(&campus), end_id, bike_id, park_id);
+        let end_state = TravellerState::new(Rc::clone(&campus), end_park_id, bike_id, end_park_id);
         plot.present().unwrap();
-        let path = find_path(&start_state, &end_state).unwrap();
-        println!("Path found with {} nodes", path.len());
-
-        let (bike, car, walk) = ("🚲", "🚗", "🚶");
+        let (path, cost) = find_path(&start_state, &end_state).unwrap();
+        println!("Path found with {} nodes, and estimated {} seconds in travel time", path.len(), cost);
 
         println!("Drawing path...");
         let points = path.iter().map(|node| coord_map(&campus.get_node(&node.me_id).unwrap().location)).collect::<Vec<_>>();
         plot.draw(&PathElement::new(points, &RED)).unwrap();
         plot.present().unwrap();
+        println!("{}", get_path_traversal_description(campus, &path));
     }
 }

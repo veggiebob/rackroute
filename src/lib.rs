@@ -2,6 +2,7 @@ pub mod campus_data;
 pub mod map_optimization;
 mod test;
 mod debug_draw;
+mod campus_directions;
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -56,7 +57,7 @@ pub enum Error {
 type Result<T> = std::result::Result<T, Error>;
 
 /// Use rich nodes to run A* on a potentially unbound graph.
-pub fn find_path<C, N>(start: &N, end: &N) -> Result<Vec<N>>
+pub fn find_path<C, N>(start: &N, end: &N) -> Result<(Vec<N>, C)>
 where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
         C: PartialOrd + Zero + Clone
 {
@@ -102,14 +103,14 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
         }
         if &current.node == end {
             println!("Searched {} nodes and found a path", searched_nodes);
-            return Ok(reconstruct_path(parent.clone()));
+            return Ok((reconstruct_path(parent.clone()), gscore[end].clone()));
         }
         for (n, edge_cost) in current.node.get_neighbors() {
             if closed.contains(&n) {
                 // it has already been finalized/visited
                 continue;
             } else {
-                let g = current.current_cost.clone() + edge_cost;
+                let g = gscore[&current.node].clone() + edge_cost;
                 if let Some(cost) = gscore.get(&n) {
                     // compare g scores because the heuristic stays the same
                     if &g < cost {
