@@ -65,7 +65,15 @@ mod tests {
             name: "e".to_string(),
             graph: Rc::clone(&graph)
         };
-        if let Ok(path) = find_path(&start_node, &end_node) {
+        if let Ok(path) = find_path(&start_node, SearchEnd::node(&end_node)) {
+            println!("path found is: {:?}", path);
+        } else {
+            println!("no path found");
+        }
+
+        let is_end = |n: &TestNode| n.name == "e".to_string();
+        let heuristic = |n: &TestNode| 1;
+        if let Ok(path) = find_path(&start_node, SearchEnd::Custom(is_end, heuristic)) {
             println!("path found is: {:?}", path);
         } else {
             println!("no path found");

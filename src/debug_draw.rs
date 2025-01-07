@@ -5,9 +5,9 @@ use full_palette::GREY;
 use osm_xml::Coordinate;
 use plotters::coord::Shift;
 use plotters::prelude::*;
-use plotters::style::full_palette::BROWN;
+use plotters::style::full_palette::{BROWN, PURPLE};
 use rand::seq::SliceRandom;
-use crate::campus_data::{read_osm_data, BoundingBox, Campus, Location};
+use crate::campus_data::{read_osm_data, BoundingBox, Campus, Location, TransMode};
 use crate::Error;
 use crate::map_optimization::connected_components;
 
@@ -72,7 +72,14 @@ pub fn create_campus_drawing<C>(campus: C, filepath: &'static str, plot_options:
     for edge in campus.edges() {
         let (x1, y1) = map_loc(&campus.get_node(&edge.start)?.location);
         let (x2, y2) = map_loc(&campus.get_node(&edge.end)?.location);
-        draw_line((&x1, &y1), (&x2, &y2), &BLACK)?;
+        let color = if edge.modes.contains(TransMode::Car) {
+            &PURPLE
+        } else if edge.modes.contains(TransMode::Bike) {
+            &GREEN
+        } else {
+            &BLACK
+        };
+        // draw_line((&x1, &y1), (&x2, &y2), color)?;
         edge_count += 1;
     }
     for point in campus.nodes() {
@@ -140,7 +147,7 @@ impl<DB: std::error::Error + Send + Sync> From<DrawingAreaErrorKind<DB>> for Err
 mod tests {
     use std::rc::Rc;
     use crate::campus_data::{read_osm_data, TravellerState};
-    use crate::{find_path};
+    use crate::{find_path, SearchEnd};
     use crate::campus_directions::get_path_traversal_description;
     use super::*;
 
@@ -157,20 +164,31 @@ mod tests {
 
     #[test]
     fn test_main() {
+
+        let timer = std::time::Instant::now();
+
         // lat: [43.05371, 43.09635]
         // long: [-77.70424, -77.64793]
-        println!("Loading campus...");
+        print!("Loading campus... ");
         let mut campus = read_osm_data("data/rit-bigger.osm", Default::default()).unwrap();
         campus.crop_latitudes(43.05371, 43.09635);
         campus.crop_longitudes(-77.70424, -77.64793);
         campus.make_strongly_connected(None);
         let campus = Rc::new(campus);
-        println!("Drawing campus...");
+        println!("{:?}", timer.elapsed());
+        let timer = std::time::Instant::now();
+
+        print!("Drawing campus...");
         let (plot, bb) = create_campus_drawing(
             Rc::clone(&campus),
             "debug/main.png",
-            &PlotOptions::default()).unwrap();
+            &PlotOptions {
+                width: 5000,
+                ..Default::default()
+            }).unwrap();
         let coord_map = map_to_screen(bb, plot.dim_in_pixel());
+        println!("{:?}", timer.elapsed());
+        let timer = std::time::Instant::now();
 
         println!("Finding start and end nodes...");
         // sample start: 43.08436913213423, -77.67268359047404
@@ -195,18 +213,28 @@ mod tests {
         let end_park_id = end_park_node.id;
         println!("Found nodes within {} and {} and {}", dist_start, dist_end, dist_park);
         println!("Car at {}, Bike at {}, start at {}, end at {}", park_id, bike_id, start_id, end_id);
+        println!("{:?}", timer.elapsed());
+        let timer = std::time::Instant::now();
 
         println!("Finding path...");
         let start_state = TravellerState::new(Rc::clone(&campus), start_id, bike_id, park_id);
-        let end_state = TravellerState::new(Rc::clone(&campus), end_park_id, bike_id, end_park_id);
+        let end = start_state.create_goal(end_id);
         plot.present().unwrap();
-        let (path, cost) = find_path(&start_state, &end_state).unwrap();
+        let (path, cost) = find_path(&start_state, end).unwrap();
         println!("Path found with {} nodes, and estimated {} seconds in travel time", path.len(), cost);
+        println!("{:?}", timer.elapsed());
+        let timer = std::time::Instant::now();
 
-        println!("Drawing path...");
+        println!("Drawing path and saving image...");
         let points = path.iter().map(|node| coord_map(&campus.get_node(&node.me_id).unwrap().location)).collect::<Vec<_>>();
-        plot.draw(&PathElement::new(points, &RED)).unwrap();
+        for (p1, p2) in points.iter().zip(points.iter().skip(1)) {
+            plot.draw(&PathElement::new(vec![*p1, *p2], &RED)).unwrap();
+        }
+        // plot.draw(&PathElement::new(points, &RED)).unwrap();
         plot.present().unwrap();
+        println!("{:?}", timer.elapsed());
+        let timer = std::time::Instant::now();
+
         println!("{}", get_path_traversal_description(campus, &path));
     }
 }

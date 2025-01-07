@@ -56,11 +56,32 @@ pub enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
+pub enum SearchEnd<'a, N, P, H> {
+    Custom(P, H),
+    Node(&'a N)
+}
+
+impl<'a, N, C> SearchEnd<'a, N, fn(&N) -> bool, fn(&N) -> C> {
+    pub fn node(node: &'a N) -> Self {
+        SearchEnd::Node(node)
+    }
+}
+
 /// Use rich nodes to run A* on a potentially unbound graph.
-pub fn find_path<C, N>(start: &N, end: &N) -> Result<(Vec<N>, C)>
+pub fn find_path<C, N, P, H>(start: &N, end: SearchEnd<N, P, H>) -> Result<(Vec<N>, C)>
 where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
-        C: PartialOrd + Zero + Clone
+        C: PartialOrd + Zero + Clone,
+        P: Fn(&N) -> bool,
+        H: Fn(&N) -> C,
 {
+    let heuristic = |n: N| match &end {
+        SearchEnd::Custom(_p, heuristic) => Ok(heuristic(&n)),
+        SearchEnd::Node(end_node) => end_node.heuristic_cost(&n)
+    };
+    let is_end = |n: N| match &end {
+        SearchEnd::Custom(predicate, _h) => predicate(&n),
+        SearchEnd::Node(end_node) => &n == *end_node,
+    };
     let mut open: BinaryHeap<SearchNode<N, C>> = {
         let mut open = BinaryHeap::new();
         open.push(SearchNode {
@@ -81,7 +102,7 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
         parent
     };
 
-    let reconstruct_path = |parent: HashMap<_, _>| {
+    let reconstruct_path = |end: &N, parent: HashMap<_, _>| {
         let mut current = end;
         let mut path = vec![end.clone()];
         while let Some(Some(p)) = parent.get(current) {
@@ -95,15 +116,15 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
     while let Some(current) = open.pop() {
         searched_nodes += 1;
         if let Some(actual_current_cost) = gscore.get(&current.node) {
-            let actual_fscore = actual_current_cost.clone() + end.heuristic_cost(&current.node)?;
+            let actual_fscore = actual_current_cost.clone() + heuristic(current.node.clone())?;
             if actual_fscore < current.current_cost {
                 // this is a duplicate
                 continue;
             }
         }
-        if &current.node == end {
+        if is_end(current.node.clone()) {
             println!("Searched {} nodes and found a path", searched_nodes);
-            return Ok((reconstruct_path(parent.clone()), gscore[end].clone()));
+            return Ok((reconstruct_path(&current.node, parent.clone()), gscore[&current.node].clone()));
         }
         for (n, edge_cost) in current.node.get_neighbors() {
             if closed.contains(&n) {
@@ -117,7 +138,7 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
                         // relax this edge
                         gscore.insert(n.clone(), cost.clone());
                         parent.insert(n.clone(), Some(current.node.clone()));
-                        let fscore = g + end.heuristic_cost(&n)?;
+                        let fscore = g + heuristic(n.clone())?;
                         // push a duplicate
                         open.push(SearchNode {
                             node: n,
@@ -129,7 +150,7 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
                     gscore.insert(n.clone(), g.clone());
                     parent.insert(n.clone(), Some(current.node.clone()));
                     open.push(SearchNode {
-                        current_cost: g + end.heuristic_cost(&n)?,
+                        current_cost: g + heuristic(n.clone())?,
                         node: n,
                     })
                 }

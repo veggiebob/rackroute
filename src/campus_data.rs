@@ -4,7 +4,7 @@ use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Div, Index, Mul, Sub};
 use std::rc::Rc;
-use crate::{Error, Node};
+use crate::{Error, Node, SearchEnd};
 use osm_xml as osm;
 use osm_xml::{Coordinate, Tag, UnresolvedReference};
 use enumflags2::{bitflags, BitFlags};
@@ -164,7 +164,8 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
          */
         let one_way = check(&way.tags, "oneway", "yes");
         let footpath = check(&way.tags, "foot", "yes");
-        let road = check(&way.tags, "motor_vehicle", "yes");
+        let road = check(&way.tags, "motor_vehicle", "yes")
+            || contains(&way.tags, "highway");
         let bike_path = check(&way.tags, "bicycle", "yes");
         let parking = check(&way.tags, "parking", "surface") || check(&way.tags, "amenity", "parking");
 
@@ -194,6 +195,7 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
                 .collect::<Vec<_>>();
             let polygon = geo::Polygon::new(LineString::new(coords), vec![]);
             parking_polygons.push(polygon);
+            continue;
         }
 
         let name = get_val(&way.tags, "name");
@@ -549,6 +551,33 @@ impl TravellerState {
             bike_id,
             car_id,
         }
+    }
+}
+impl TravellerState {
+
+    pub fn create_goal(&self, end_id: CampusNodeID)
+        -> SearchEnd<
+            TravellerState,
+            impl Fn(&TravellerState) -> bool + '_,
+            impl Fn(&TravellerState) -> Seconds + '_
+        > {
+        let (end_p, end_h) = (end_id.clone(), end_id);
+        SearchEnd::Custom(
+            move |n: &TravellerState| {
+                let end_id = end_p;
+                &n.me_id == &end_id
+            },
+            move |n: &TravellerState| {
+                let end_id = end_h;
+                self.campus.campus_config.get_time(
+                    &TransMode::Walk,
+                    self.campus.calculate_world_dist(&n.me_id, &end_id).expect(format!(
+                        "Could not calculate distance between {} and {}",
+                        &n.me_id, &end_id
+                    ).as_str())
+                )
+            }
+        )
     }
 }
 impl Node<TravelCost> for TravellerState {
