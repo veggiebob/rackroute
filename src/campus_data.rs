@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Div, Index, Mul, Sub};
@@ -134,6 +134,30 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         // bicycle_parking: wall_loops
     }
     let mut parking_polygons = vec![];
+    let mut highway_types = HashSet::new();
+    let highway_roadlike: HashSet<_> = vec![
+        "primary",
+        "secondary",
+        "tertiary",
+        "residential",
+        "service",
+        "unclassified",
+        "primary_link",
+        "track", // check "surface" tag
+        "construction"
+    ].into_iter().collect();
+    let highway_bikelike: HashSet<_> = vec![
+        "cycleway",
+        "path", // unless bicycle=no
+        // "footway", // if "bicycle=yes"
+        "track",
+        "pedestrian",
+        "residential",
+        "unclassified",
+        "service",
+        "primary", "secondary", "tertiary", // check for "cycleway=lane"
+        "construction", // check "construction=cycleway"
+    ].into_iter().collect();
     for (_id, way) in doc.ways.iter() {
         /*
         other interesting information:
@@ -162,11 +186,20 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
             <tag k="parking" v="surface"/>
             <tag k="surface" v="asphalt"/>
          */
+        let mut footpath = check(&way.tags, "foot", "yes");
+        let mut road = check(&way.tags, "motor_vehicle", "yes");
+        let mut bike_path = false;
+
+        let bike_yes = check(&way.tags, "bicycle", "yes");
+        bike_path |= bike_yes;
+
+        if let Some(highway) = get_val(&way.tags, "highway") {
+            road |= highway_roadlike.contains(highway.as_str());
+            bike_path |= highway_bikelike.contains(highway.as_str());
+            bike_path |= highway.as_str() == "footway" && bike_yes;
+        }
+
         let one_way = check(&way.tags, "oneway", "yes");
-        let footpath = check(&way.tags, "foot", "yes");
-        let road = check(&way.tags, "motor_vehicle", "yes")
-            || contains(&way.tags, "highway");
-        let bike_path = check(&way.tags, "bicycle", "yes");
         let parking = check(&way.tags, "parking", "surface") || check(&way.tags, "amenity", "parking");
 
 
@@ -174,7 +207,7 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         if footpath { modes |= TransMode::Walk; }
         if bike_path { modes |= TransMode::Bike; }
         if road { modes |= TransMode::Car }
-        
+
         let is_misc_feature = !footpath && !bike_path && !road
             && !parking
             && !contains(&way.tags, "highway")
@@ -204,6 +237,10 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
             let mut map = HashMap::new();
             if let Some(name) = name {
                 map.insert("name".to_string(), name);
+            }
+            if let Some(highway) = get_val(&way.tags, "highway") {
+                map.insert("highway".to_string(), highway.clone());
+                highway_types.insert(highway.clone());
             }
             map
         };
@@ -275,6 +312,7 @@ pub fn read_osm_data(filepath: &str, config: CampusConfig) -> Result<Campus> {
         }
     }
     println!("Loaded {} nodes and {} edges", nodes.len(), edge_count);
+    println!("{} highway types: {:?}", highway_types.len(), highway_types);
     let mut campus = Campus {
         nodes,
         edges,

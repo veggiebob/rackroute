@@ -47,7 +47,7 @@ fn map_to_screen(bb: BoundingBox, screen_dims: (u32, u32)) -> Box<dyn Fn(&Locati
     Box::new(map_loc)
 }
 
-pub fn create_campus_drawing<C>(campus: C, filepath: &'static str, plot_options: &PlotOptions) -> Result<(DrawingArea<BitMapBackend<'static>, Shift>, BoundingBox), Error>
+pub fn create_campus_drawing<C>(campus: C, filepath: &'static str, plot_options: &PlotOptions) -> Result<(DrawingArea<SVGBackend<'static>, Shift>, BoundingBox), Error>
     where C: Borrow<Campus>
 {
     let campus = campus.borrow();
@@ -58,7 +58,7 @@ pub fn create_campus_drawing<C>(campus: C, filepath: &'static str, plot_options:
     let map_loc = map_to_screen(bb, (width as u32, height as u32));
     println!("Bounding box is {:?}", bb);
 
-    let root = BitMapBackend::new(filepath, (width as u32, height as u32)).into_drawing_area();
+    let root = SVGBackend::new(filepath, (width as u32, height as u32)).into_drawing_area();
     root.fill(&WHITE)?;
     let draw_line = |(x1, y1): (&i32, &i32), (x2, y2): (&i32, &i32), style|
         root.draw(&PathElement::new(vec![(*x1, *y1), (*x2, *y2)], style));
@@ -73,13 +73,13 @@ pub fn create_campus_drawing<C>(campus: C, filepath: &'static str, plot_options:
         let (x1, y1) = map_loc(&campus.get_node(&edge.start)?.location);
         let (x2, y2) = map_loc(&campus.get_node(&edge.end)?.location);
         let color = if edge.modes.contains(TransMode::Car) {
-            &PURPLE
+            &BLUE
         } else if edge.modes.contains(TransMode::Bike) {
             &GREEN
         } else {
             &BLACK
         };
-        // draw_line((&x1, &y1), (&x2, &y2), color)?;
+        draw_line((&x1, &y1), (&x2, &y2), color)?;
         edge_count += 1;
     }
     for point in campus.nodes() {
@@ -110,7 +110,7 @@ fn generate_colorset(n: u32) -> Vec<HSLColor> {
     colors
 }
 
-pub fn draw_campus_components<C>(campus: C, filepath: &'static str) -> Result<(DrawingArea<BitMapBackend<'static>, Shift>, BoundingBox), Error>
+pub fn draw_campus_components<C>(campus: C, filepath: &'static str) -> Result<(DrawingArea<SVGBackend<'static>, Shift>, BoundingBox), Error>
     where C: Borrow<Campus>
 {
     let campus = campus.borrow();
@@ -181,7 +181,7 @@ mod tests {
         print!("Drawing campus...");
         let (plot, bb) = create_campus_drawing(
             Rc::clone(&campus),
-            "debug/main.png",
+            "debug/main.svg",
             &PlotOptions {
                 width: 5000,
                 ..Default::default()
@@ -219,7 +219,6 @@ mod tests {
         println!("Finding path...");
         let start_state = TravellerState::new(Rc::clone(&campus), start_id, bike_id, park_id);
         let end = start_state.create_goal(end_id);
-        plot.present().unwrap();
         let (path, cost) = find_path(&start_state, end).unwrap();
         println!("Path found with {} nodes, and estimated {} seconds in travel time", path.len(), cost);
         println!("{:?}", timer.elapsed());
@@ -227,10 +226,7 @@ mod tests {
 
         println!("Drawing path and saving image...");
         let points = path.iter().map(|node| coord_map(&campus.get_node(&node.me_id).unwrap().location)).collect::<Vec<_>>();
-        for (p1, p2) in points.iter().zip(points.iter().skip(1)) {
-            plot.draw(&PathElement::new(vec![*p1, *p2], &RED)).unwrap();
-        }
-        // plot.draw(&PathElement::new(points, &RED)).unwrap();
+        plot.draw(&PathElement::new(points, &RED)).unwrap();
         plot.present().unwrap();
         println!("{:?}", timer.elapsed());
         let timer = std::time::Instant::now();
