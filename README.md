@@ -2,4 +2,5 @@
 
 Multimodal navigation using OSM data.
 
-![](assets/main.svg)
+example (path shown in red):
+![](assets/example.svg)
