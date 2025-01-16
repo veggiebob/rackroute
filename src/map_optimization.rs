@@ -1,7 +1,7 @@
-use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
 use crate::campus_data::{Campus, CampusNodeID, Meters, TransMode};
 use crate::Location;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 
 //
 type GroupID = u32;
@@ -32,18 +32,24 @@ pub fn connected_components(campus: &Campus) -> HashMap<CampusNodeID, GroupID> {
         let mut visited = HashSet::new();
         let mut stack = vec![node.id];
         while let Some(n) = stack.pop() {
-            if visited.contains(&n) { continue }
+            if visited.contains(&n) {
+                continue;
+            }
             visited.insert(n);
 
             if let Some(n_gid) = group.get(&n) {
                 let mut o_parent = gid;
                 while let Some(Some(p)) = group_parent.get(&o_parent) {
-                    if o_parent == *p { break }
+                    if o_parent == *p {
+                        break;
+                    }
                     o_parent = *p;
                 }
                 let mut c_parent = *n_gid;
                 while let Some(Some(p)) = group_parent.get(&c_parent) {
-                    if c_parent == *p { break }
+                    if c_parent == *p {
+                        break;
+                    }
                     c_parent = *p;
                 }
                 if o_parent != c_parent {
@@ -78,7 +84,10 @@ pub fn connected_components(campus: &Campus) -> HashMap<CampusNodeID, GroupID> {
     group.into_iter().map(|(k, v)| (k, parent(v))).collect()
 }
 
-fn get_group_dist(campus: &Campus, component_map: &HashMap<CampusNodeID, GroupID>) -> HashMap<(GroupID, GroupID), Meters> {
+fn get_group_dist(
+    campus: &Campus,
+    component_map: &HashMap<CampusNodeID, GroupID>,
+) -> HashMap<(GroupID, GroupID), Meters> {
     let group_ids = component_map.values().collect::<HashSet<_>>();
     let mut group_dist: HashMap<(GroupID, GroupID), Meters> = HashMap::new();
     let err_msg = "map_optimization::get_fully_connected_edges: error in algorithm";
@@ -86,13 +95,21 @@ fn get_group_dist(campus: &Campus, component_map: &HashMap<CampusNodeID, GroupID
     let group_nodes = {
         let mut map = HashMap::new();
         for g in group_ids.iter() {
-            map.insert(*g, campus_nodes.iter().filter(|n| component_map[&n.id] == **g).collect::<Vec<_>>());
+            map.insert(
+                *g,
+                campus_nodes
+                    .iter()
+                    .filter(|n| component_map[&n.id] == **g)
+                    .collect::<Vec<_>>(),
+            );
         }
         map
     };
     for &&a_group in group_ids.iter() {
         for &&b_group in group_ids.iter() {
-            if a_group == b_group { continue }
+            if a_group == b_group {
+                continue;
+            }
             // brute force find minimum distance
             let mut min_dist = Meters::INFINITY;
             for &&a_node in group_nodes[&a_group].iter() {
@@ -109,21 +126,32 @@ fn get_group_dist(campus: &Campus, component_map: &HashMap<CampusNodeID, GroupID
     group_dist
 }
 
-pub fn get_new_edges(campus: &Campus, relaxation: Option<f64>) -> Vec<(CampusNodeID, CampusNodeID)> {
+pub fn get_new_edges(
+    campus: &Campus,
+    relaxation: Option<f64>,
+) -> Vec<(CampusNodeID, CampusNodeID)> {
     let relaxation = relaxation.unwrap_or(1.10);
     let component_map = connected_components(campus);
     let err_msg = "map_optimization::get_new_edges: error in algorithm";
     let mut group_dist = get_group_dist(campus, &component_map)
-        .into_iter().collect::<Vec<_>>();
-    group_dist.sort_by(|(_edge1, dist1), (_edge2, dist2)|
-        dist1.partial_cmp(dist2).unwrap_or(Ordering::Equal));
+        .into_iter()
+        .collect::<Vec<_>>();
+    group_dist.sort_by(|(_edge1, dist1), (_edge2, dist2)| {
+        dist1.partial_cmp(dist2).unwrap_or(Ordering::Equal)
+    });
     let group_dist = group_dist;
     let components = component_map.values().collect::<HashSet<_>>();
     let campus_nodes = campus.nodes();
     let group_nodes = {
         let mut map = HashMap::new();
         for g in components.iter() {
-            map.insert(*g, campus_nodes.iter().filter(|n| component_map[&n.id] == **g).collect::<Vec<_>>());
+            map.insert(
+                *g,
+                campus_nodes
+                    .iter()
+                    .filter(|n| component_map[&n.id] == **g)
+                    .collect::<Vec<_>>(),
+            );
         }
         map
     };
@@ -189,7 +217,8 @@ pub fn get_new_edges(campus: &Campus, relaxation: Option<f64>) -> Vec<(CampusNod
                 new_edges.push(edge);
                 if !fully_connected {
                     pre_fully_connected_dists.push(min_dist);
-                    min_connected_avg_dist = pre_fully_connected_dists.iter().sum::<Meters>() / pre_fully_connected_dists.len() as Meters;
+                    min_connected_avg_dist = pre_fully_connected_dists.iter().sum::<Meters>()
+                        / pre_fully_connected_dists.len() as Meters;
                 }
             }
         }
@@ -199,15 +228,14 @@ pub fn get_new_edges(campus: &Campus, relaxation: Option<f64>) -> Vec<(CampusNod
 
 #[cfg(test)]
 mod test {
-    use enumflags2::BitFlags;
-    use crate::*;
     use crate::campus_data::{read_osm_data, TransMode};
     use crate::map_optimization::{connected_components, get_new_edges};
+    use crate::*;
+    use enumflags2::BitFlags;
 
     #[test]
     fn test_cc() {
-        let campus = read_osm_data("./data/rit.osm", Default::default())
-            .unwrap();
+        let campus = read_osm_data("./data/rit.osm", Default::default()).unwrap();
         let groups = connected_components(&campus);
         // println!("{:?}", groups);
         let group_set = groups.values().collect::<HashSet<_>>();

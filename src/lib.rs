@@ -1,21 +1,22 @@
 pub mod campus_data;
+mod campus_directions;
+mod debug_draw;
 pub mod map_optimization;
 mod test;
-mod debug_draw;
-mod campus_directions;
 
+use num::Zero;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
-use num::Zero;
 
 type Location = (f64, f64);
 
 trait Node<D> {
-
     /// Get all the neighbors of a node and
-    fn get_neighbors(&self) -> Vec<(Self, D)> where Self: Sized;
+    fn get_neighbors(&self) -> Vec<(Self, D)>
+    where
+        Self: Sized;
 
     /// Give an underestimated cost to get from self to other
     fn heuristic_cost(&self, other: &Self) -> Result<D>;
@@ -25,19 +26,19 @@ trait Node<D> {
 #[derive(Debug)]
 struct SearchNode<N, C> {
     node: N,
-    current_cost: C
+    current_cost: C,
 }
 
 impl<N: Eq, C: PartialEq> Eq for SearchNode<N, C> {}
 impl<N: Eq, C: PartialEq> PartialEq<Self> for SearchNode<N, C> {
     fn eq(&self, other: &Self) -> bool {
-        self.node == other.node
-        && self.current_cost == other.current_cost
+        self.node == other.node && self.current_cost == other.current_cost
     }
 }
 impl<N: Eq, C: PartialEq + PartialOrd> PartialOrd<Self> for SearchNode<N, C> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.current_cost.partial_cmp(&other.current_cost)
+        self.current_cost
+            .partial_cmp(&other.current_cost)
             .map(|o| o.reverse()) // this is a min heap
     }
 }
@@ -58,7 +59,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 pub enum SearchEnd<'a, N, P, H> {
     Custom(P, H),
-    Node(&'a N)
+    Node(&'a N),
 }
 
 impl<'a, N, C> SearchEnd<'a, N, fn(&N) -> bool, fn(&N) -> C> {
@@ -69,14 +70,15 @@ impl<'a, N, C> SearchEnd<'a, N, fn(&N) -> bool, fn(&N) -> C> {
 
 /// Use rich nodes to run A* on a potentially unbound graph.
 pub fn find_path<C, N, P, H>(start: &N, end: SearchEnd<N, P, H>) -> Result<(Vec<N>, C)>
-where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
-        C: PartialOrd + Zero + Clone,
-        P: Fn(&N) -> bool,
-        H: Fn(&N) -> C,
+where
+    N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
+    C: PartialOrd + Zero + Clone,
+    P: Fn(&N) -> bool,
+    H: Fn(&N) -> C,
 {
     let heuristic = |n: N| match &end {
         SearchEnd::Custom(_p, heuristic) => Ok(heuristic(&n)),
-        SearchEnd::Node(end_node) => end_node.heuristic_cost(&n)
+        SearchEnd::Node(end_node) => end_node.heuristic_cost(&n),
     };
     let is_end = |n: N| match &end {
         SearchEnd::Custom(predicate, _h) => predicate(&n),
@@ -86,7 +88,7 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
         let mut open = BinaryHeap::new();
         open.push(SearchNode {
             node: start.clone(),
-            current_cost: C::zero()
+            current_cost: C::zero(),
         });
         open
     };
@@ -124,7 +126,10 @@ where   N: Clone + PartialEq + Eq + Hash + Node<C> + Debug,
         }
         if is_end(current.node.clone()) {
             println!("Searched {} nodes and found a path", searched_nodes);
-            return Ok((reconstruct_path(&current.node, parent.clone()), gscore[&current.node].clone()));
+            return Ok((
+                reconstruct_path(&current.node, parent.clone()),
+                gscore[&current.node].clone(),
+            ));
         }
         for (n, edge_cost) in current.node.get_neighbors() {
             if closed.contains(&n) {

@@ -1,19 +1,18 @@
-
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-    use crate::*;
     use crate::campus_data::read_osm_data;
+    use crate::*;
+    use std::rc::Rc;
 
     #[derive(Debug)]
     struct TestGraph {
-        neighbors: HashMap<String, Vec<String>>
+        neighbors: HashMap<String, Vec<String>>,
     }
 
     #[derive(Clone, Debug)]
     struct TestNode {
         name: String,
-        graph: Rc<TestGraph>
+        graph: Rc<TestGraph>,
     }
     impl PartialEq for TestNode {
         fn eq(&self, other: &Self) -> bool {
@@ -30,16 +29,22 @@ mod tests {
     impl Node<u8> for TestNode {
         fn get_neighbors(&self) -> Vec<(Self, u8)>
         where
-            Self: Sized
+            Self: Sized,
         {
             let empty = vec![];
             let neighbors = self.graph.neighbors.get(&self.name).unwrap_or(&empty);
-            neighbors.iter().map(|name|
-                        (TestNode {
+            neighbors
+                .iter()
+                .map(|name| {
+                    (
+                        TestNode {
                             name: name.clone(),
-                            graph: Rc::clone(&self.graph)
-                        }, 2))
-                        .collect()
+                            graph: Rc::clone(&self.graph),
+                        },
+                        2,
+                    )
+                })
+                .collect()
         }
 
         fn heuristic_cost(&self, other: &Self) -> Result<u8> {
@@ -51,19 +56,28 @@ mod tests {
         let graph = Rc::new(TestGraph {
             neighbors: {
                 let mut map = HashMap::new();
-                map.insert(String::from("a"), vec!["b", "c"].into_iter().map(String::from).collect());
-                map.insert(String::from("b"), vec!["c", "d"].into_iter().map(String::from).collect());
-                map.insert(String::from("c"), vec!["d", "e"].into_iter().map(String::from).collect());
+                map.insert(
+                    String::from("a"),
+                    vec!["b", "c"].into_iter().map(String::from).collect(),
+                );
+                map.insert(
+                    String::from("b"),
+                    vec!["c", "d"].into_iter().map(String::from).collect(),
+                );
+                map.insert(
+                    String::from("c"),
+                    vec!["d", "e"].into_iter().map(String::from).collect(),
+                );
                 map
-            }
+            },
         });
         let start_node = TestNode {
             name: "a".to_string(),
-            graph: Rc::clone(&graph)
+            graph: Rc::clone(&graph),
         };
         let end_node = TestNode {
             name: "e".to_string(),
-            graph: Rc::clone(&graph)
+            graph: Rc::clone(&graph),
         };
         if let Ok(path) = find_path(&start_node, SearchEnd::node(&end_node)) {
             println!("path found is: {:?}", path);
