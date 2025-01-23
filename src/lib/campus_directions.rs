@@ -1,7 +1,7 @@
-use crate::campus_data::{Campus, CampusEdge, TransMode, TravellerState};
 use std::borrow::Borrow;
 use std::fmt::{Display, Formatter};
 use std::fs::DirEntry;
+use crate::lib::campus_data::{Campus, CampusEdge, TransMode, TravellerState};
 
 enum EdgeModeGuess {
     /// Walking (no bike)

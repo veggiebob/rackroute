@@ -1,6 +1,3 @@
-use crate::campus_data::{read_osm_data, BoundingBox, Campus, Location, TransMode};
-use crate::map_optimization::connected_components;
-use crate::Error;
 use full_palette::GREY;
 use osm_xml::Coordinate;
 use plotters::coord::Shift;
@@ -10,6 +7,9 @@ use rand::seq::SliceRandom;
 use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::rc::Rc;
+use crate::lib::campus_data::{BoundingBox, Campus, Location, TransMode};
+use crate::lib::Error;
+use crate::lib::map_optimization::connected_components;
 
 struct PlotOptions {
     pub width: u32,
@@ -155,10 +155,10 @@ impl<DB: std::error::Error + Send + Sync> From<DrawingAreaErrorKind<DB>> for Err
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::campus_data::{read_osm_data, TravellerState};
-    use crate::campus_directions::get_path_traversal_description;
-    use crate::{find_path, SearchEnd};
     use std::rc::Rc;
+    use crate::lib::campus_data::{read_osm_data, TravellerState};
+    use crate::lib::campus_directions::get_path_traversal_description;
+    use crate::lib::find_path;
 
     #[test]
     fn test_components() {

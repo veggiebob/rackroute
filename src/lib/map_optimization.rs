@@ -1,7 +1,6 @@
-use crate::campus_data::{Campus, CampusNodeID, Meters, TransMode};
-use crate::Location;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use crate::lib::campus_data::{Campus, CampusNodeID, Meters};
 
 //
 type GroupID = u32;
@@ -228,10 +227,10 @@ pub fn get_new_edges(
 
 #[cfg(test)]
 mod test {
-    use crate::campus_data::{read_osm_data, TransMode};
-    use crate::map_optimization::{connected_components, get_new_edges};
-    use crate::*;
+    use std::collections::HashSet;
     use enumflags2::BitFlags;
+    use crate::lib::campus_data::{read_osm_data, TransMode};
+    use crate::lib::map_optimization::{connected_components, get_new_edges};
 
     #[test]
     fn test_cc() {

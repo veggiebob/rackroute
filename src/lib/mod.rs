@@ -1,16 +1,15 @@
-pub mod campus_data;
-mod campus_directions;
-mod debug_draw;
-pub mod map_optimization;
-mod test;
-
 use num::Zero;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
-type Location = (f64, f64);
+pub mod campus_data;
+pub mod campus_directions;
+pub mod debug_draw;
+pub mod map_optimization;
+#[cfg(test)]
+pub mod test;
 
 trait Node<D> {
     /// Get all the neighbors of a node and

@@ -1,5 +1,3 @@
-use crate::map_optimization::get_new_edges;
-use crate::{Error, Node, SearchEnd};
 use enumflags2::{bitflags, BitFlags};
 use geo::{Contains, LineString};
 use osm_xml as osm;
@@ -10,6 +8,8 @@ use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Div, Index, Mul, Sub};
 use std::rc::Rc;
+use crate::lib::{Error, Node, SearchEnd};
+use crate::lib::map_optimization::get_new_edges;
 
 pub type CampusNodeID = osm::Id;
 
