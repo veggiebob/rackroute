@@ -46,11 +46,11 @@ fn map_to_screen(bb: BoundingBox, screen_dims: (u32, u32)) -> Box<dyn Fn(&Locati
     Box::new(map_loc)
 }
 
-pub fn create_campus_drawing<C>(
+pub fn create_campus_drawing<'a, C>(
     campus: C,
-    filepath: &'static str,
+    filepath: &'a str,
     plot_options: &PlotOptions,
-) -> Result<(DrawingArea<SVGBackend<'static>, Shift>, BoundingBox), Error>
+) -> Result<(DrawingArea<SVGBackend<'a>, Shift>, BoundingBox), Error>
 where
     C: Borrow<Campus>,
 {
@@ -117,8 +117,8 @@ fn generate_colorset(n: u32) -> Vec<HSLColor> {
 
 pub fn draw_campus_components<C>(
     campus: C,
-    filepath: &'static str,
-) -> Result<(DrawingArea<SVGBackend<'static>, Shift>, BoundingBox), Error>
+    filepath: &str,
+) -> Result<(DrawingArea<SVGBackend, Shift>, BoundingBox), Error>
 where
     C: Borrow<Campus>,
 {
@@ -163,7 +163,8 @@ mod tests {
     #[test]
     fn test_components() {
         let campus = read_osm_data("./data/rit-bigger.osm", Default::default()).unwrap();
-        draw_campus_components(&campus, "debug/components-before.png").unwrap();
+        let filename = "debug/components-before.png".to_string();
+        draw_campus_components(&campus, filename.as_str()).unwrap();
         let mut m_campus = campus;
         m_campus.make_strongly_connected(None);
         let campus = m_campus;
